@@ -1,0 +1,12 @@
+# ANT+ library
+openant==1.2.0
+
+# BLE library
+bleak>=0.21.0
+
+# Protobuf
+protobuf>=4.25.0
+grpcio-tools>=1.60.0
+
+# Process monitoring (optional)
+psutil>=5.9.0
