@@ -14,25 +14,57 @@ ANT+ / Zwift Power Meter adatokat fogad és BLE-n keresztül vezérel egy ventil
 
 ## 📦 Telepítés
 
-### 1. Python környezet:
+### 1. Repository klónozása:
+```bash
+git clone https://github.com/manszabiigen/smart-fan-controller.git
+cd smart-fan-controller
+```
+
+### 2. Python virtual environment:
 ```bash
 python -m venv venv
 venv\Scripts\activate  # Windows
 source venv/bin/activate  # Linux/Mac
 ```
 
-### 2. Függőségek telepítése:
+### 3. Függőségek telepítése:
 ```bash
 pip install -r requirements.txt
 ```
 
-### 3. Zwift protobuf generálás (opcionális):
+### 4. Zwift protobuf generálás:
 ```bash
 python -m grpc_tools.protoc -I. --python_out=. zwift.proto
 ```
 
-### 4. Beállítások módosítása:
+### 5. Beállítások módosítása:
 Szerkeszd a `settings.json` fájlt (FTP, zóna határok, stb.)
+
+---
+
+## 📦 Függőségek
+
+| Package | Verzió | Leírás | Státusz |
+|---------|--------|--------|---------|
+| **openant** | `1.2.0` | ANT+ Power Meter kommunikáció | Kötelező |
+| **bleak** | `≥0.21.0` | Bluetooth Low Energy (BLE) | Kötelező |
+| **protobuf** | `≥4.25.0` | Protocol Buffers | Kötelező |
+| **grpcio-tools** | `≥1.60.0` | Protobuf code generation | Kötelező |
+| **psutil** | `≥5.9.0` | Folyamat figyelés (Zwift detektálás) | Opcionális* |
+
+\* *Ha `psutil` nincs telepítve, a program feltételezi hogy a Zwift mindig fut.*
+
+### Verzió ellenőrzés:
+
+```bash
+pip list | findstr "openant bleak protobuf grpcio psutil"
+```
+
+### Frissítés legújabb verzióra:
+
+```bash
+pip install --upgrade openant bleak protobuf grpcio-tools psutil
+```
 
 ## 🚀 Használat
 
