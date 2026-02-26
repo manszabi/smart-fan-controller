@@ -50,7 +50,7 @@ class TestPowerZoneControllerInit(unittest.TestCase):
 
     def test_default_settings_when_file_missing(self):
         """Test that default settings are used when file doesn't exist."""
-        tmp_file = '/tmp/nonexistent_settings_12345.json'
+        tmp_file = os.path.join(tempfile.gettempdir(), 'nonexistent_settings_12345.json')
         if os.path.exists(tmp_file):
             os.unlink(tmp_file)
         controller = PowerZoneController(tmp_file)
