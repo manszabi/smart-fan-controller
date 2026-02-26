@@ -202,7 +202,7 @@ class BLEController:
         try:
             if self.client:
                 return self.client.is_connected
-        except:
+        except Exception:
             pass
         return False
 
@@ -211,7 +211,7 @@ class BLEController:
             try:
                 await self.client.disconnect()
                 print("✓ BLE kapcsolat lezárva")
-            except:
+            except Exception:
                 pass
             finally:
                 self.is_connected = False
@@ -783,7 +783,7 @@ class PowerZoneController:
                 cooldown_send_zone = self.check_cooldown_and_apply(new_zone)
 
             zone_change_send = None
-            if self.current_zone is None or (not self.cooldown_active and self.should_change_zone(new_zone)):
+            if self.current_zone is None or self.should_change_zone(new_zone):
                 self.current_zone = new_zone
                 self.last_zone_change = time.time()
                 zone_change_send = new_zone
@@ -920,7 +920,7 @@ class ZwiftSource:
         if self.sock:
             try:
                 self.sock.close()
-            except:
+            except Exception:
                 pass
             self.sock = None
 
@@ -1103,7 +1103,7 @@ class DataSourceManager:
                 for d in self.antplus_devices:
                     try:
                         d.close_channel()
-                    except:
+                    except Exception:
                         pass
             if self.antplus_node:
                 self.antplus_node.stop()
@@ -1226,65 +1226,66 @@ def main():
     devnull = open(os.devnull, 'w')
     sys.stderr = devnull
 
-    print("=" * 60)
-    print("  Smart Fan Controller - ANT+ Power Meter → BLE Fan Control")
-    print("=" * 60)
-    print()
-
-    controller = PowerZoneController("settings.json")
-
-    print()
-    print("-" * 60)
-
-    controller.ble.start()
-    controller.start_dropout_checker()
-
-    ble_timeout = (controller.settings['ble']['scan_timeout'] +
-                   controller.settings['ble']['connection_timeout'])
-    
-    if not controller.settings['ble'].get('skip_connection', False):
-        print(f"⏳ BLE inicializálás folyamatban (max {ble_timeout}s)...")
-    
-    controller.ble.ready_event.wait(timeout=ble_timeout)
-    print("✓ BLE inicializálás kész")
-
-    print("-" * 60)
-    print()
-
-    data_manager = DataSourceManager(controller.settings, controller)
-    data_manager.start()
-
-    print()
-    print("🚴 Figyelés elindítva... (Ctrl+C a leállításhoz)")
-    print()
-
     try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print("\n\n🛑 Leállítás...")
+        print("=" * 60)
+        print("  Smart Fan Controller - ANT+ Power Meter → BLE Fan Control")
+        print("=" * 60)
+        print()
+
+        controller = PowerZoneController("settings.json")
+
+        print()
+        print("-" * 60)
+
+        controller.ble.start()
+        controller.start_dropout_checker()
+
+        ble_timeout = (controller.settings['ble']['scan_timeout'] +
+                       controller.settings['ble']['connection_timeout'])
+
+        if not controller.settings['ble'].get('skip_connection', False):
+            print(f"⏳ BLE inicializálás folyamatban (max {ble_timeout}s)...")
+
+        controller.ble.ready_event.wait(timeout=ble_timeout)
+        print("✓ BLE inicializálás kész")
+
+        print("-" * 60)
+        print()
+
+        data_manager = DataSourceManager(controller.settings, controller)
+        data_manager.start()
+
+        print()
+        print("🚴 Figyelés elindítva... (Ctrl+C a leállításhoz)")
+        print()
+
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("\n\n🛑 Leállítás...")
+        finally:
+            try:
+                data_manager.stop()
+            except Exception as e:
+                print(f"DataSource leállítási hiba: {e}")
+
+            try:
+                controller.stop_dropout_checker()
+            except Exception as e:
+                print(f"Dropout thread leállítási hiba: {e}")
+
+            try:
+                controller.ble.stop()
+            except Exception as e:
+                print(f"BLE leállítási hiba: {e}")
+
+            print()
+            print("✓ Program leállítva")
+            print()
     finally:
-        try:
-            data_manager.stop()
-        except Exception as e:
-            print(f"DataSource leállítási hiba: {e}")
-
-        try:
-            controller.stop_dropout_checker()
-        except Exception as e:
-            print(f"Dropout thread leállítási hiba: {e}")
-
-        try:
-            controller.ble.stop()
-        except Exception as e:
-            print(f"BLE leállítási hiba: {e}")
-
         sys.stderr = sys.__stderr__
         devnull.close()
-
-        print()
-        print("✓ Program leállítva")
-        print()
 
 
 if __name__ == "__main__":
