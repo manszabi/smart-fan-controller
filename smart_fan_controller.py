@@ -280,6 +280,9 @@ class BLEController:
             return False
 
     def send_command_sync(self, level):
+        if isinstance(level, bool) or not isinstance(level, int) or level < 0 or level > 3:
+            print(f"⚠ Érvénytelen parancs szint: {level} (egész számnak kell lennie, 0-3 között)")
+            return
         if not self.running:
             print("⚠ BLE thread nem fut, parancs elvetve")
             return
@@ -557,6 +560,11 @@ class PowerZoneController:
                     else:
                         print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'fallback' érték: {ds['fallback']} ('zwift' vagy 'none' kell legyen)")
                         validation_failed = True
+
+                if settings['data_source']['primary'] == settings['data_source']['fallback']:
+                    print(f"⚠ FIGYELMEZTETÉS: 'primary' és 'fallback' azonos ('{settings['data_source']['primary']}')! Fallback 'none'-ra állítva.")
+                    settings['data_source']['fallback'] = 'none'
+                    validation_failed = True
 
                 if 'zwift' in ds:
                     if isinstance(ds['zwift'], dict):
@@ -852,6 +860,9 @@ class ZwiftSource:
         return None, offset
 
     def _parse_power(self, data):
+        if not data:
+            return None
+
         if PROTOBUF_AVAILABLE:
             try:
                 state = PlayerState()
