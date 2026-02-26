@@ -634,6 +634,14 @@ class TestBLEControllerTestMode(unittest.TestCase):
             self.ble.send_command_sync(level)
             self.assertEqual(self.ble.command_queue.get_nowait(), level)
 
+    def test_send_command_sync_invalid_level_bool(self):
+        """Boolean values should be rejected despite being int subtypes."""
+        self.ble.running = True
+        self.ble.send_command_sync(True)
+        self.assertTrue(self.ble.command_queue.empty())
+        self.ble.send_command_sync(False)
+        self.assertTrue(self.ble.command_queue.empty())
+
 
 class TestSettingsValidationDataSource(unittest.TestCase):
     """Test data source settings validation."""

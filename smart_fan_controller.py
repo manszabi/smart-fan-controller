@@ -280,8 +280,8 @@ class BLEController:
             return False
 
     def send_command_sync(self, level):
-        if not isinstance(level, int) or level < 0 or level > 3:
-            print(f"⚠ Érvénytelen parancs szint: {level} (0-3 között kell lennie)")
+        if isinstance(level, bool) or not isinstance(level, int) or level < 0 or level > 3:
+            print(f"⚠ Érvénytelen parancs szint: {level} (egész számnak kell lennie, 0-3 között)")
             return
         if not self.running:
             print("⚠ BLE thread nem fut, parancs elvetve")
