@@ -603,6 +603,160 @@ class TestBLEControllerTestMode(unittest.TestCase):
         self.assertFalse(self.ble.command_queue.empty())
         self.assertEqual(self.ble.command_queue.get_nowait(), 2)
 
+    def test_send_command_sync_invalid_level_negative(self):
+        """Negative level should be rejected."""
+        self.ble.running = True
+        self.ble.send_command_sync(-1)
+        self.assertTrue(self.ble.command_queue.empty())
+
+    def test_send_command_sync_invalid_level_too_high(self):
+        """Level above 3 should be rejected."""
+        self.ble.running = True
+        self.ble.send_command_sync(4)
+        self.assertTrue(self.ble.command_queue.empty())
+
+    def test_send_command_sync_invalid_level_string(self):
+        """Non-integer level should be rejected."""
+        self.ble.running = True
+        self.ble.send_command_sync("high")
+        self.assertTrue(self.ble.command_queue.empty())
+
+    def test_send_command_sync_invalid_level_float(self):
+        """Float level should be rejected."""
+        self.ble.running = True
+        self.ble.send_command_sync(1.5)
+        self.assertTrue(self.ble.command_queue.empty())
+
+    def test_send_command_sync_valid_boundaries(self):
+        """All valid zone levels (0-3) should be accepted."""
+        self.ble.running = True
+        for level in range(4):
+            self.ble.send_command_sync(level)
+            self.assertEqual(self.ble.command_queue.get_nowait(), level)
+
+
+class TestSettingsValidationDataSource(unittest.TestCase):
+    """Test data source settings validation."""
+
+    def _create_settings_file(self, settings_dict):
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings_dict, f, indent=2)
+        f.close()
+        return f.name
+
+    def tearDown(self):
+        if hasattr(self, '_settings_file') and os.path.exists(self._settings_file):
+            os.unlink(self._settings_file)
+
+    def test_primary_equals_fallback_resets_fallback(self):
+        """When primary == fallback, fallback should be set to 'none'."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['primary'] = 'zwift'
+        settings['data_source']['fallback'] = 'zwift'
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['data_source']['fallback'], 'none')
+
+    def test_invalid_primary_uses_default(self):
+        """Invalid primary value should fall back to default."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['primary'] = 'invalid'
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['data_source']['primary'],
+                         DEFAULT_SETTINGS['data_source']['primary'])
+
+    def test_invalid_fallback_uses_default(self):
+        """Invalid fallback value should fall back to default."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['fallback'] = 'invalid'
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['data_source']['fallback'],
+                         DEFAULT_SETTINGS['data_source']['fallback'])
+
+    def test_invalid_port_uses_default(self):
+        """Invalid port should fall back to default."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['zwift']['port'] = 99999
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['data_source']['zwift']['port'],
+                         DEFAULT_SETTINGS['data_source']['zwift']['port'])
+
+    def test_valid_zwift_primary(self):
+        """Zwift as primary source should be accepted."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['primary'] = 'zwift'
+        settings['data_source']['fallback'] = 'none'
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['data_source']['primary'], 'zwift')
+        self.assertEqual(controller.settings['data_source']['fallback'], 'none')
+
+
+class TestParseEmptyData(unittest.TestCase):
+    """Test that _parse_power handles empty/invalid data correctly."""
+
+    def setUp(self):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        self.source = smart_fan_controller.ZwiftSource(
+            settings['data_source']['zwift'],
+            callback=lambda x: None
+        )
+
+    def test_parse_power_none_data(self):
+        """None-like empty data should return None."""
+        power = self.source._parse_power(b'')
+        self.assertIsNone(power)
+
+    def test_parse_power_single_byte(self):
+        """Single byte should return None."""
+        power = self.source._parse_power(b'\x00')
+        self.assertIsNone(power)
+
+
+class TestSettingsValidationBLE(unittest.TestCase):
+    """Test BLE settings validation edge cases."""
+
+    def _create_settings_file(self, settings_dict):
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings_dict, f, indent=2)
+        f.close()
+        return f.name
+
+    def tearDown(self):
+        if hasattr(self, '_settings_file') and os.path.exists(self._settings_file):
+            os.unlink(self._settings_file)
+
+    def test_invalid_scan_timeout_uses_default(self):
+        """Invalid scan_timeout should fall back to default."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['scan_timeout'] = 100
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['ble']['scan_timeout'],
+                         DEFAULT_SETTINGS['ble']['scan_timeout'])
+
+    def test_invalid_device_name_empty(self):
+        """Empty device_name should fall back to default."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['device_name'] = ''
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['ble']['device_name'],
+                         DEFAULT_SETTINGS['ble']['device_name'])
+
+    def test_minimum_samples_exceeds_buffer(self):
+        """minimum_samples larger than buffer should be capped."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['buffer_seconds'] = 1  # buffer_size = 4
+        settings['minimum_samples'] = 100
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        buffer_size = controller.settings['buffer_seconds'] * 4
+        self.assertLessEqual(controller.settings['minimum_samples'], buffer_size)
+
 
 if __name__ == '__main__':
     unittest.main()
