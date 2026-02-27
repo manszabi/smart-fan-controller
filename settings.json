@@ -31,5 +31,18 @@
       "process_name": "ZwiftApp.exe",
       "check_interval": 5
     }
+  },
+  "antplus_bridge": {
+    "enabled": false,
+    "heart_rate": {
+      "enabled": true,
+      "device_id": 0
+    },
+    "ble_broadcast": {
+      "enabled": true,
+      "power_service": true,
+      "heart_rate_service": true,
+      "device_name": "SmartFanBridge"
+    }
   }
 }

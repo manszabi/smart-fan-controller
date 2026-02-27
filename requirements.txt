@@ -4,6 +4,9 @@ openant==1.2.0
 # BLE library
 bleak>=0.21.0
 
+# BLE peripheral/server library (for ANT+ bridge)
+bless>=0.3.0
+
 # Protobuf
 protobuf>=4.25.0
 grpcio-tools>=1.60.0
