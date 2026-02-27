@@ -809,13 +809,27 @@ class PowerZoneController:
     def should_change_zone(self, new_zone):
         current_time = time.time()
 
-        if self.zero_power_immediate and new_zone == 0:
+        # --- 0W (leállás) kezelés explicit ---
+    if new_zone == 0:
+        if self.zero_power_immediate:
+            # Azonnali leállás (cooldown nélkül)
             if self.current_zone != 0:
                 print(f"✓ 0W detektálva: azonnali leállás (cooldown nélkül)")
                 self.cooldown_active = False
                 self.pending_zone = None
                 return True
             return False
+        else:
+            # Normál leállás (cooldown szükséges)
+            if self.current_zone != 0:
+                self.cooldown_active = True
+                self.cooldown_start_time = current_time
+                self.pending_zone = 0
+                print(f"🕐 0W detektálva: cooldown indítva {self.cooldown_seconds}s (cél: 0)")
+                return False
+            else:
+                # Már 0-ban vagyunk, nincs teendő
+                return False
 
         if self.cooldown_active:
             if new_zone >= self.current_zone:
