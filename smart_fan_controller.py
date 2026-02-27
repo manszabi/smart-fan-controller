@@ -12,6 +12,7 @@ from collections import deque
 from openant.easy.node import Node
 from openant.devices import ANTPLUS_NETWORK_KEY
 from openant.devices.power_meter import PowerMeter, PowerData
+from openant.devices.heart_rate import HeartRate, HeartRateData
 from bleak import BleakClient, BleakScanner
 
 # psutil opcionális import
@@ -21,6 +22,17 @@ try:
 except ImportError:
     PSUTIL_AVAILABLE = False
     print("⚠ psutil nem elérhető, Zwift folyamat figyelés kikapcsolva")
+
+# bless BLE szerver - opcionális
+try:
+    from bless import (
+        BlessServer,
+        GATTCharacteristicProperties,
+        GATTAttributePermissions,
+    )
+    BLESS_AVAILABLE = True
+except ImportError:
+    BLESS_AVAILABLE = False
 
 # Zwift protobuf - csak ha elérhető
 try:
@@ -64,6 +76,19 @@ DEFAULT_SETTINGS = {
             "host": "127.0.0.1",
             "process_name": "ZwiftApp.exe",
             "check_interval": 5
+        }
+    },
+    "antplus_bridge": {
+        "enabled": False,
+        "heart_rate": {
+            "enabled": True,
+            "device_id": 0
+        },
+        "ble_broadcast": {
+            "enabled": True,
+            "power_service": True,
+            "heart_rate_service": True,
+            "device_name": "SmartFanBridge"
         }
     }
 }
@@ -344,6 +369,8 @@ class PowerZoneController:
         self.state_lock = threading.Lock()
         self.last_cooldown_print = 0
 
+        self.current_heart_rate = None
+
         self.ble = BLEController(self.settings)
 
         self.running = False
@@ -605,6 +632,56 @@ class PowerZoneController:
                 print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'data_source' formátum")
                 validation_failed = True
 
+        if 'antplus_bridge' in loaded_settings:
+            if isinstance(loaded_settings['antplus_bridge'], dict):
+                ab = loaded_settings['antplus_bridge']
+                if 'enabled' in ab:
+                    if isinstance(ab['enabled'], bool):
+                        settings['antplus_bridge']['enabled'] = ab['enabled']
+                    else:
+                        print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'antplus_bridge.enabled' érték (true vagy false kell legyen)")
+                        validation_failed = True
+                if 'heart_rate' in ab:
+                    if isinstance(ab['heart_rate'], dict):
+                        hr = ab['heart_rate']
+                        if 'enabled' in hr:
+                            if isinstance(hr['enabled'], bool):
+                                settings['antplus_bridge']['heart_rate']['enabled'] = hr['enabled']
+                            else:
+                                print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'heart_rate.enabled' érték (true vagy false kell legyen)")
+                                validation_failed = True
+                        if 'device_id' in hr:
+                            if isinstance(hr['device_id'], int) and 0 <= hr['device_id'] <= 65535:
+                                settings['antplus_bridge']['heart_rate']['device_id'] = hr['device_id']
+                            else:
+                                print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'heart_rate.device_id' érték (0-65535 kell legyen)")
+                                validation_failed = True
+                    else:
+                        print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'antplus_bridge.heart_rate' formátum")
+                        validation_failed = True
+                if 'ble_broadcast' in ab:
+                    if isinstance(ab['ble_broadcast'], dict):
+                        bb = ab['ble_broadcast']
+                        for flag in ('enabled', 'power_service', 'heart_rate_service'):
+                            if flag in bb:
+                                if isinstance(bb[flag], bool):
+                                    settings['antplus_bridge']['ble_broadcast'][flag] = bb[flag]
+                                else:
+                                    print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'ble_broadcast.{flag}' érték (true vagy false kell legyen)")
+                                    validation_failed = True
+                        if 'device_name' in bb:
+                            if isinstance(bb['device_name'], str) and len(bb['device_name']) > 0:
+                                settings['antplus_bridge']['ble_broadcast']['device_name'] = bb['device_name']
+                            else:
+                                print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'ble_broadcast.device_name' érték")
+                                validation_failed = True
+                    else:
+                        print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'antplus_bridge.ble_broadcast' formátum")
+                        validation_failed = True
+            else:
+                print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'antplus_bridge' formátum")
+                validation_failed = True
+
         if settings['min_watt'] >= settings['max_watt']:
             print(f"⚠ FIGYELMEZTETÉS: 'min_watt' >= 'max_watt'! Alapértelmezett értékek használata.")
             settings['min_watt'] = DEFAULT_SETTINGS['min_watt']
@@ -619,7 +696,7 @@ class PowerZoneController:
 
         known_keys = {'ftp', 'min_watt', 'max_watt', 'cooldown_seconds', 'buffer_seconds',
                       'minimum_samples', 'dropout_timeout', 'zero_power_immediate',
-                      'zone_thresholds', 'ble', 'data_source'}
+                      'zone_thresholds', 'ble', 'data_source', 'antplus_bridge'}
         unknown_keys = set(loaded_settings.keys()) - known_keys
         if unknown_keys:
             print(f"⚠ FIGYELMEZTETÉS: Ismeretlen mező(k): {', '.join(unknown_keys)}")
@@ -799,6 +876,16 @@ class PowerZoneController:
         send_zone = cooldown_send_zone if cooldown_send_zone is not None else zone_change_send
         if send_zone is not None:
             self.ble.send_command_sync(send_zone)
+
+    def process_heart_rate_data(self, hr):
+        try:
+            hr = int(hr)
+        except (TypeError, ValueError):
+            return
+        if hr <= 0 or hr > 250:
+            return
+        self.current_heart_rate = hr
+        print(f"❤ Szívfrekvencia: {hr} bpm")
 
 
 # ============================================================
@@ -1000,6 +1087,152 @@ class ZwiftSource:
 
 
 # ============================================================
+# BLEBridgeServer - ANT+ → BLE broadcast
+# ============================================================
+class BLEBridgeServer:
+    """Re-broadcasts ANT+ power and heart rate data as BLE GATT services."""
+
+    CYCLING_POWER_SERVICE_UUID = "00001818-0000-1000-8000-00805f9b34fb"
+    CYCLING_POWER_MEASUREMENT_UUID = "00002a63-0000-1000-8000-00805f9b34fb"
+    HEART_RATE_SERVICE_UUID = "0000180d-0000-1000-8000-00805f9b34fb"
+    HEART_RATE_MEASUREMENT_UUID = "00002a37-0000-1000-8000-00805f9b34fb"
+
+    def __init__(self, settings):
+        bridge = settings.get('antplus_bridge', {})
+        self.enabled = bridge.get('enabled', False)
+        broadcast = bridge.get('ble_broadcast', {})
+        self.broadcast_enabled = broadcast.get('enabled', True)
+        self.power_service_enabled = broadcast.get('power_service', True)
+        self.hr_service_enabled = broadcast.get('heart_rate_service', True)
+        self.device_name = broadcast.get('device_name', 'SmartFanBridge')
+
+        self._server = None
+        self._loop = None
+        self._thread = None
+        self._running = False
+
+    def is_active(self):
+        return self.enabled and self.broadcast_enabled
+
+    def start(self):
+        if not self.is_active():
+            return
+        if not BLESS_AVAILABLE:
+            print("⚠ bless library nem elérhető, BLE bridge kikapcsolva")
+            return
+        self._running = True
+        self._thread = threading.Thread(
+            target=self._run_loop,
+            daemon=True,
+            name="BLEBridge-Thread"
+        )
+        self._thread.start()
+        print("✓ BLE Bridge thread elindítva")
+
+    def _run_loop(self):
+        try:
+            self._loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._loop)
+            self._loop.run_until_complete(self._async_run())
+        except Exception as e:
+            print(f"✗ BLE Bridge kritikus hiba: {e}")
+        finally:
+            if self._loop:
+                self._loop.close()
+            print("✓ BLE Bridge thread leállt")
+
+    async def _async_run(self):
+        try:
+            self._server = BlessServer(self.device_name, loop=self._loop)
+
+            if self.power_service_enabled:
+                await self._server.add_new_service(self.CYCLING_POWER_SERVICE_UUID)
+                await self._server.add_new_characteristic(
+                    self.CYCLING_POWER_SERVICE_UUID,
+                    self.CYCLING_POWER_MEASUREMENT_UUID,
+                    GATTCharacteristicProperties.read | GATTCharacteristicProperties.notify,
+                    bytearray([0x00, 0x00, 0x00, 0x00]),
+                    GATTAttributePermissions.readable,
+                )
+
+            if self.hr_service_enabled:
+                await self._server.add_new_service(self.HEART_RATE_SERVICE_UUID)
+                await self._server.add_new_characteristic(
+                    self.HEART_RATE_SERVICE_UUID,
+                    self.HEART_RATE_MEASUREMENT_UUID,
+                    GATTCharacteristicProperties.read | GATTCharacteristicProperties.notify,
+                    bytearray([0x00, 0x00]),
+                    GATTAttributePermissions.readable,
+                )
+
+            await self._server.start()
+            print(f"✓ BLE Bridge aktív: {self.device_name}")
+
+            while self._running:
+                await asyncio.sleep(0.1)
+
+            await self._server.stop()
+
+        except Exception as e:
+            print(f"✗ BLE Bridge hiba: {e}")
+
+    def _do_update_power(self, value):
+        try:
+            char = self._server.get_characteristic(self.CYCLING_POWER_MEASUREMENT_UUID)
+            if char:
+                char.value = value
+                self._server.update_value(
+                    self.CYCLING_POWER_SERVICE_UUID,
+                    self.CYCLING_POWER_MEASUREMENT_UUID,
+                )
+        except Exception:
+            pass
+
+    def _do_update_heart_rate(self, value):
+        try:
+            char = self._server.get_characteristic(self.HEART_RATE_MEASUREMENT_UUID)
+            if char:
+                char.value = value
+                self._server.update_value(
+                    self.HEART_RATE_SERVICE_UUID,
+                    self.HEART_RATE_MEASUREMENT_UUID,
+                )
+        except Exception:
+            pass
+
+    def update_power(self, power_watts):
+        if not self._running or not self._server or not self.power_service_enabled:
+            return
+        try:
+            power = max(-32768, min(32767, int(power_watts)))
+            value = bytearray(4)
+            value[0] = 0x00
+            value[1] = 0x00
+            value[2] = power & 0xFF
+            value[3] = (power >> 8) & 0xFF
+            if self._loop:
+                self._loop.call_soon_threadsafe(self._do_update_power, value)
+        except Exception:
+            pass
+
+    def update_heart_rate(self, hr_bpm):
+        if not self._running or not self._server or not self.hr_service_enabled:
+            return
+        try:
+            hr = max(0, min(255, int(hr_bpm)))
+            value = bytearray([0x00, hr])
+            if self._loop:
+                self._loop.call_soon_threadsafe(self._do_update_heart_rate, value)
+        except Exception:
+            pass
+
+    def stop(self):
+        self._running = False
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=3)
+
+
+# ============================================================
 # DataSourceManager - ANT+ / Zwift kezelő
 # ============================================================
 class DataSourceManager:
@@ -1034,6 +1267,8 @@ class DataSourceManager:
                 self.controller.process_power_data
             )
 
+        self.bridge = BLEBridgeServer(settings)
+
     def _on_antplus_found(self, device):
         print(f"✓ ANT+ eszköz csatlakoztatva: {device}")
         self.antplus_last_data = time.time()
@@ -1041,17 +1276,34 @@ class DataSourceManager:
     def _on_antplus_data(self, page, page_name, data):
         if isinstance(data, PowerData):
             self.antplus_last_data = time.time()
-            self.controller.process_power_data(data.instantaneous_power)
+            power = data.instantaneous_power
+            self.controller.process_power_data(power)
+            self.bridge.update_power(power)
+        elif isinstance(data, HeartRateData):
+            hr = data.heart_rate
+            self.controller.process_heart_rate_data(hr)
+            self.bridge.update_heart_rate(hr)
+
+    def _register_antplus_device(self, device):
+        self.antplus_devices.append(device)
+        device.on_found = lambda: self._on_antplus_found(device)
+        device.on_device_data = self._on_antplus_data
 
     def _init_antplus_node(self):
         self.antplus_node = Node()
         self.antplus_node.set_network_key(0x00, ANTPLUS_NETWORK_KEY)
 
+        self.antplus_devices = []
         meter = PowerMeter(self.antplus_node)
-        self.antplus_devices = [meter]
+        self._register_antplus_device(meter)
 
-        meter.on_found = lambda: self._on_antplus_found(meter)
-        meter.on_device_data = self._on_antplus_data
+        bridge_settings = self.settings.get('antplus_bridge', {})
+        if bridge_settings.get('enabled', False):
+            hr_settings = bridge_settings.get('heart_rate', {})
+            if hr_settings.get('enabled', True):
+                device_id = hr_settings.get('device_id', 0)
+                hr_monitor = HeartRate(self.antplus_node, device_id=device_id)
+                self._register_antplus_device(hr_monitor)
 
     def _start_antplus(self):
         try:
@@ -1213,6 +1465,8 @@ class DataSourceManager:
         self.monitor_thread.start()
         print("✓ Adatforrás monitor elindítva")
 
+        self.bridge.start()
+
     def stop(self):
         self.running = False
 
@@ -1226,6 +1480,11 @@ class DataSourceManager:
                 self.zwift_source.stop()
         except Exception as e:
             print(f"Zwift leállítási hiba: {e}")
+
+        try:
+            self.bridge.stop()
+        except Exception as e:
+            print(f"BLE Bridge leállítási hiba: {e}")
 
 
 # ============================================================

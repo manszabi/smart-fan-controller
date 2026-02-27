@@ -14,23 +14,31 @@ import sys
 mock_node_module = MagicMock()
 mock_devices_module = MagicMock()
 mock_power_meter_module = MagicMock()
+mock_heart_rate_module = MagicMock()
 sys.modules['openant'] = MagicMock()
 sys.modules['openant.easy'] = MagicMock()
 sys.modules['openant.easy.node'] = mock_node_module
 sys.modules['openant.devices'] = mock_devices_module
 sys.modules['openant.devices.power_meter'] = mock_power_meter_module
+sys.modules['openant.devices.heart_rate'] = mock_heart_rate_module
 mock_devices_module.ANTPLUS_NETWORK_KEY = b'\x00' * 8
 mock_power_meter_module.PowerMeter = MagicMock
 mock_power_meter_module.PowerData = type('PowerData', (), {'instantaneous_power': 0})
+mock_heart_rate_module.HeartRate = MagicMock
+mock_heart_rate_module.HeartRateData = type('HeartRateData', (), {'heart_rate': 0})
 
 # Mock bleak
 sys.modules['bleak'] = MagicMock()
+
+# Mock bless
+sys.modules['bless'] = MagicMock()
 
 # Now import the module under test
 import smart_fan_controller
 from smart_fan_controller import (
     PowerZoneController,
     BLEController,
+    BLEBridgeServer,
     DEFAULT_SETTINGS,
 )
 
@@ -764,6 +772,230 @@ class TestSettingsValidationBLE(unittest.TestCase):
         controller = PowerZoneController(self._settings_file)
         buffer_size = controller.settings['buffer_seconds'] * 4
         self.assertLessEqual(controller.settings['minimum_samples'], buffer_size)
+
+
+class TestHeartRateData(unittest.TestCase):
+    """Test heart rate data handling in PowerZoneController."""
+
+    def setUp(self):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['skip_connection'] = True
+        settings['minimum_samples'] = 1
+        settings['buffer_seconds'] = 1
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings, f, indent=2)
+        f.close()
+        self._tmp = f.name
+        self.controller = PowerZoneController(f.name)
+
+    def tearDown(self):
+        if os.path.exists(self._tmp):
+            os.unlink(self._tmp)
+
+    def test_initial_heart_rate_is_none(self):
+        """Heart rate should be None initially."""
+        self.assertIsNone(self.controller.current_heart_rate)
+
+    def test_process_valid_heart_rate(self):
+        """Valid heart rate should be stored."""
+        self.controller.process_heart_rate_data(150)
+        self.assertEqual(self.controller.current_heart_rate, 150)
+
+    def test_process_heart_rate_updates(self):
+        """Heart rate should update on successive calls."""
+        self.controller.process_heart_rate_data(120)
+        self.controller.process_heart_rate_data(145)
+        self.assertEqual(self.controller.current_heart_rate, 145)
+
+    def test_invalid_heart_rate_zero(self):
+        """Zero heart rate should be ignored."""
+        self.controller.process_heart_rate_data(100)
+        self.controller.process_heart_rate_data(0)
+        self.assertEqual(self.controller.current_heart_rate, 100)
+
+    def test_invalid_heart_rate_too_high(self):
+        """Heart rate above 250 should be ignored."""
+        self.controller.process_heart_rate_data(100)
+        self.controller.process_heart_rate_data(300)
+        self.assertEqual(self.controller.current_heart_rate, 100)
+
+    def test_invalid_heart_rate_negative(self):
+        """Negative heart rate should be ignored."""
+        self.controller.process_heart_rate_data(100)
+        self.controller.process_heart_rate_data(-5)
+        self.assertEqual(self.controller.current_heart_rate, 100)
+
+    def test_invalid_heart_rate_non_numeric(self):
+        """Non-numeric heart rate should be ignored."""
+        self.controller.process_heart_rate_data(100)
+        self.controller.process_heart_rate_data("abc")
+        self.assertEqual(self.controller.current_heart_rate, 100)
+
+    def test_heart_rate_boundary_1(self):
+        """HR of 1 should be valid."""
+        self.controller.process_heart_rate_data(1)
+        self.assertEqual(self.controller.current_heart_rate, 1)
+
+    def test_heart_rate_boundary_250(self):
+        """HR of 250 should be valid."""
+        self.controller.process_heart_rate_data(250)
+        self.assertEqual(self.controller.current_heart_rate, 250)
+
+
+class TestBLEBridgeServer(unittest.TestCase):
+    """Test BLEBridgeServer initialization and configuration."""
+
+    def _make_settings(self, enabled=False, broadcast_enabled=True,
+                       power_service=True, hr_service=True,
+                       device_name='SmartFanBridge'):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['antplus_bridge'] = {
+            'enabled': enabled,
+            'heart_rate': {'enabled': True, 'device_id': 0},
+            'ble_broadcast': {
+                'enabled': broadcast_enabled,
+                'power_service': power_service,
+                'heart_rate_service': hr_service,
+                'device_name': device_name,
+            }
+        }
+        return settings
+
+    def test_disabled_by_default(self):
+        """Bridge should be disabled by default."""
+        bridge = BLEBridgeServer(DEFAULT_SETTINGS)
+        self.assertFalse(bridge.enabled)
+
+    def test_enabled_when_configured(self):
+        """Bridge should be enabled when settings say so."""
+        settings = self._make_settings(enabled=True)
+        bridge = BLEBridgeServer(settings)
+        self.assertTrue(bridge.enabled)
+
+    def test_is_active_requires_both_flags(self):
+        """is_active() requires both enabled and broadcast_enabled."""
+        settings = self._make_settings(enabled=True, broadcast_enabled=True)
+        bridge = BLEBridgeServer(settings)
+        self.assertTrue(bridge.is_active())
+
+        settings2 = self._make_settings(enabled=True, broadcast_enabled=False)
+        bridge2 = BLEBridgeServer(settings2)
+        self.assertFalse(bridge2.is_active())
+
+        settings3 = self._make_settings(enabled=False, broadcast_enabled=True)
+        bridge3 = BLEBridgeServer(settings3)
+        self.assertFalse(bridge3.is_active())
+
+    def test_device_name(self):
+        """Device name should be read from settings."""
+        settings = self._make_settings(enabled=True, device_name='TestBridge')
+        bridge = BLEBridgeServer(settings)
+        self.assertEqual(bridge.device_name, 'TestBridge')
+
+    def test_start_does_nothing_when_disabled(self):
+        """start() should not create a thread when bridge is disabled."""
+        bridge = BLEBridgeServer(DEFAULT_SETTINGS)
+        bridge.start()
+        self.assertIsNone(bridge._thread)
+
+    def test_update_power_safe_when_not_running(self):
+        """update_power() should not raise when bridge is not running."""
+        bridge = BLEBridgeServer(DEFAULT_SETTINGS)
+        bridge.update_power(200)  # should not raise
+
+    def test_update_heart_rate_safe_when_not_running(self):
+        """update_heart_rate() should not raise when bridge is not running."""
+        bridge = BLEBridgeServer(DEFAULT_SETTINGS)
+        bridge.update_heart_rate(150)  # should not raise
+
+    def test_stop_safe_when_not_started(self):
+        """stop() should not raise when bridge was never started."""
+        bridge = BLEBridgeServer(DEFAULT_SETTINGS)
+        bridge.stop()  # should not raise
+
+
+class TestAntplusBridgeSettingsValidation(unittest.TestCase):
+    """Test antplus_bridge settings validation."""
+
+    def _create_settings_file(self, settings_dict):
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings_dict, f, indent=2)
+        f.close()
+        return f.name
+
+    def tearDown(self):
+        if hasattr(self, '_settings_file') and os.path.exists(self._settings_file):
+            os.unlink(self._settings_file)
+
+    def test_antplus_bridge_enabled(self):
+        """antplus_bridge.enabled=true should be accepted."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['antplus_bridge']['enabled'] = True
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertTrue(controller.settings['antplus_bridge']['enabled'])
+
+    def test_antplus_bridge_disabled(self):
+        """antplus_bridge.enabled=false should be accepted."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['antplus_bridge']['enabled'] = False
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertFalse(controller.settings['antplus_bridge']['enabled'])
+
+    def test_invalid_enabled_uses_default(self):
+        """Non-boolean enabled should revert to default."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['antplus_bridge']['enabled'] = 'yes'
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(
+            controller.settings['antplus_bridge']['enabled'],
+            DEFAULT_SETTINGS['antplus_bridge']['enabled']
+        )
+
+    def test_valid_device_id(self):
+        """Valid device_id should be accepted."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['antplus_bridge']['heart_rate']['device_id'] = 12345
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(
+            controller.settings['antplus_bridge']['heart_rate']['device_id'], 12345
+        )
+
+    def test_invalid_device_id_uses_default(self):
+        """Out-of-range device_id should revert to default."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['antplus_bridge']['heart_rate']['device_id'] = 99999
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(
+            controller.settings['antplus_bridge']['heart_rate']['device_id'],
+            DEFAULT_SETTINGS['antplus_bridge']['heart_rate']['device_id']
+        )
+
+    def test_valid_device_name(self):
+        """Valid ble_broadcast device_name should be accepted."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['antplus_bridge']['ble_broadcast']['device_name'] = 'MyBridge'
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(
+            controller.settings['antplus_bridge']['ble_broadcast']['device_name'],
+            'MyBridge'
+        )
+
+    def test_invalid_antplus_bridge_format(self):
+        """Non-dict antplus_bridge should revert to default."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['antplus_bridge'] = 'invalid'
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(
+            controller.settings['antplus_bridge'],
+            DEFAULT_SETTINGS['antplus_bridge']
+        )
 
 
 if __name__ == '__main__':
