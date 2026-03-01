@@ -66,11 +66,13 @@ DEFAULT_SETTINGS = {
         "max_retries": 10,
         "command_timeout": 3,
         "service_uuid": "0000ffe0-0000-1000-8000-00805f9b34fb",
-        "characteristic_uuid": "0000ffe1-0000-1000-8000-00805f9b34fb"
+        "characteristic_uuid": "0000ffe1-0000-1000-8000-00805f9b34fb",
+        "pin_code": None
     },
     "data_source": {
         "primary": "antplus",
         "fallback": "zwift",
+        "heart_rate_source": "antplus",
         "zwift": {
             "port": 3022,
             "host": "127.0.0.1",
@@ -90,6 +92,14 @@ DEFAULT_SETTINGS = {
             "heart_rate_service": True,
             "device_name": "SmartFanBridge"
         }
+    },
+    "heart_rate_zones": {
+        "enabled": False,
+        "max_hr": 185,
+        "resting_hr": 60,
+        "zone_mode": "power_only",
+        "z1_max_percent": 70,
+        "z2_max_percent": 80
     }
 }
 
@@ -109,6 +119,7 @@ class BLEController:
         self.command_timeout = settings['ble']['command_timeout']
         self.service_uuid = settings['ble']['service_uuid']
         self.characteristic_uuid = settings['ble']['characteristic_uuid']
+        self.pin_code = settings['ble'].get('pin_code', None)
 
         self.client = None
         self.device_address = None
@@ -212,6 +223,13 @@ class BLEController:
                 return True
             self.client = BleakClient(self.device_address, timeout=self.connection_timeout)
             await self.client.connect()
+            if self.pin_code is not None:
+                print(f"🔗 BLE párosítás folyamatban: {self.device_address}")
+                try:
+                    await self.client.pair()
+                    print(f"✓ BLE párosítás sikeres: {self.device_address}")
+                except Exception as pair_err:
+                    print(f"⚠ BLE párosítás hiba (folytatás): {pair_err}")
             self.is_connected = True
             self.retry_count = 0
             self.retry_reset_time = None
@@ -352,6 +370,7 @@ class PowerZoneController:
         self.dropout_timeout = self.settings['dropout_timeout']
         self.zero_power_immediate = self.settings['zero_power_immediate']
         self.zone_thresholds = self.settings['zone_thresholds']
+        self.hr_zone_settings = self.settings.get('heart_rate_zones', copy.deepcopy(DEFAULT_SETTINGS['heart_rate_zones']))
 
         self.zones = self.calculate_zones()
 
@@ -370,6 +389,10 @@ class PowerZoneController:
         self.last_cooldown_print = 0
 
         self.current_heart_rate = None
+        self.current_hr_zone = None
+        self.current_power_zone = None
+        hr_buffer_size = int(self.buffer_seconds * 4)
+        self.hr_buffer = deque(maxlen=hr_buffer_size)
 
         self.ble = BLEController(self.settings)
 
@@ -387,6 +410,15 @@ class PowerZoneController:
         print(f"BLE eszköz: {self.settings['ble']['device_name']}")
         if self.settings['ble'].get('skip_connection', False):
             print(f"BLE mód: TEST MODE (skip_connection=true)")
+        pin_code = self.settings['ble'].get('pin_code', None)
+        if pin_code is not None:
+            print(f"BLE PIN: {pin_code}")
+        hr_source = self.settings['data_source'].get('heart_rate_source', 'antplus')
+        print(f"HR forrás: {hr_source}")
+        if self.hr_zone_settings.get('enabled', False):
+            hr_z = self.hr_zones
+            print(f"HR zóna mód: {self.hr_zone_settings.get('zone_mode', 'power_only')}")
+            print(f"HR zóna határok: Z0 < {self.hr_zone_settings['resting_hr']} bpm, Z1 < {hr_z['z1_max']} bpm, Z2 < {hr_z['z2_max']} bpm")
 
     def start_dropout_checker(self):
         self.running = True
@@ -566,6 +598,14 @@ class PowerZoneController:
                     else:
                         print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'characteristic_uuid' érték")
                         validation_failed = True
+                if 'pin_code' in ble_settings:
+                    if ble_settings['pin_code'] is None:
+                        settings['ble']['pin_code'] = None
+                    elif isinstance(ble_settings['pin_code'], int) and not isinstance(ble_settings['pin_code'], bool) and 0 <= ble_settings['pin_code'] <= 999999:
+                        settings['ble']['pin_code'] = ble_settings['pin_code']
+                    else:
+                        print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'pin_code' érték: {ble_settings['pin_code']} (0-999999 közötti egész szám vagy null kell legyen)")
+                        validation_failed = True
             else:
                 print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'ble' formátum")
                 validation_failed = True
@@ -592,6 +632,13 @@ class PowerZoneController:
                     print(f"⚠ FIGYELMEZTETÉS: 'primary' és 'fallback' azonos ('{settings['data_source']['primary']}')! Fallback 'none'-ra állítva.")
                     settings['data_source']['fallback'] = 'none'
                     validation_failed = True
+
+                if 'heart_rate_source' in ds:
+                    if ds['heart_rate_source'] in ('antplus', 'zwift', 'both'):
+                        settings['data_source']['heart_rate_source'] = ds['heart_rate_source']
+                    else:
+                        print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'heart_rate_source' érték: {ds['heart_rate_source']} ('antplus', 'zwift' vagy 'both' kell legyen)")
+                        validation_failed = True
 
                 if 'zwift' in ds:
                     if isinstance(ds['zwift'], dict):
@@ -682,6 +729,63 @@ class PowerZoneController:
                 print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'antplus_bridge' formátum")
                 validation_failed = True
 
+        if 'heart_rate_zones' in loaded_settings:
+            if isinstance(loaded_settings['heart_rate_zones'], dict):
+                hrz = loaded_settings['heart_rate_zones']
+                if 'enabled' in hrz:
+                    if isinstance(hrz['enabled'], bool):
+                        settings['heart_rate_zones']['enabled'] = hrz['enabled']
+                    else:
+                        print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'heart_rate_zones.enabled' érték (true vagy false kell legyen)")
+                        validation_failed = True
+                if 'max_hr' in hrz:
+                    if isinstance(hrz['max_hr'], int) and not isinstance(hrz['max_hr'], bool) and 100 <= hrz['max_hr'] <= 220:
+                        settings['heart_rate_zones']['max_hr'] = hrz['max_hr']
+                    else:
+                        print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'max_hr' érték: {hrz['max_hr']} (100-220 közötti egész szám kell legyen)")
+                        validation_failed = True
+                if 'resting_hr' in hrz:
+                    if isinstance(hrz['resting_hr'], int) and not isinstance(hrz['resting_hr'], bool) and 30 <= hrz['resting_hr'] <= 100:
+                        settings['heart_rate_zones']['resting_hr'] = hrz['resting_hr']
+                    else:
+                        print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'resting_hr' érték: {hrz['resting_hr']} (30-100 közötti egész szám kell legyen)")
+                        validation_failed = True
+                if 'zone_mode' in hrz:
+                    if hrz['zone_mode'] in ('hr_only', 'higher_wins', 'power_only'):
+                        settings['heart_rate_zones']['zone_mode'] = hrz['zone_mode']
+                    else:
+                        print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'zone_mode' érték: {hrz['zone_mode']} ('hr_only', 'higher_wins' vagy 'power_only' kell legyen)")
+                        validation_failed = True
+                if 'z1_max_percent' in hrz:
+                    if isinstance(hrz['z1_max_percent'], int) and not isinstance(hrz['z1_max_percent'], bool) and 1 <= hrz['z1_max_percent'] <= 100:
+                        settings['heart_rate_zones']['z1_max_percent'] = hrz['z1_max_percent']
+                    else:
+                        print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'heart_rate_zones.z1_max_percent' érték: {hrz['z1_max_percent']} (1-100 között kell lennie)")
+                        validation_failed = True
+                if 'z2_max_percent' in hrz:
+                    if isinstance(hrz['z2_max_percent'], int) and not isinstance(hrz['z2_max_percent'], bool) and 1 <= hrz['z2_max_percent'] <= 100:
+                        settings['heart_rate_zones']['z2_max_percent'] = hrz['z2_max_percent']
+                    else:
+                        print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'heart_rate_zones.z2_max_percent' érték: {hrz['z2_max_percent']} (1-100 között kell lennie)")
+                        validation_failed = True
+                if settings['heart_rate_zones']['z1_max_percent'] >= settings['heart_rate_zones']['z2_max_percent']:
+                    print(f"⚠ FIGYELMEZTETÉS: HR z1_max_percent >= z2_max_percent! Alapértelmezett HR zóna határok használata.")
+                    settings['heart_rate_zones']['z1_max_percent'] = DEFAULT_SETTINGS['heart_rate_zones']['z1_max_percent']
+                    settings['heart_rate_zones']['z2_max_percent'] = DEFAULT_SETTINGS['heart_rate_zones']['z2_max_percent']
+                    validation_failed = True
+                max_hr = settings['heart_rate_zones']['max_hr']
+                resting_hr = settings['heart_rate_zones']['resting_hr']
+                z1_max = max_hr * settings['heart_rate_zones']['z1_max_percent'] / 100
+                if resting_hr >= z1_max:
+                    print(f"⚠ FIGYELMEZTETÉS: 'resting_hr' ({resting_hr}) >= z1_max ({z1_max:.0f})! Alapértelmezett HR zóna határok használata.")
+                    settings['heart_rate_zones']['resting_hr'] = DEFAULT_SETTINGS['heart_rate_zones']['resting_hr']
+                    settings['heart_rate_zones']['z1_max_percent'] = DEFAULT_SETTINGS['heart_rate_zones']['z1_max_percent']
+                    settings['heart_rate_zones']['z2_max_percent'] = DEFAULT_SETTINGS['heart_rate_zones']['z2_max_percent']
+                    validation_failed = True
+            else:
+                print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'heart_rate_zones' formátum")
+                validation_failed = True
+
         if settings['min_watt'] >= settings['max_watt']:
             print(f"⚠ FIGYELMEZTETÉS: 'min_watt' >= 'max_watt'! Alapértelmezett értékek használata.")
             settings['min_watt'] = DEFAULT_SETTINGS['min_watt']
@@ -696,7 +800,8 @@ class PowerZoneController:
 
         known_keys = {'ftp', 'min_watt', 'max_watt', 'cooldown_seconds', 'buffer_seconds',
                       'minimum_samples', 'dropout_timeout', 'zero_power_immediate',
-                      'zone_thresholds', 'ble', 'data_source', 'antplus_bridge'}
+                      'zone_thresholds', 'ble', 'data_source', 'antplus_bridge',
+                      'heart_rate_zones'}
         unknown_keys = set(loaded_settings.keys()) - known_keys
         if unknown_keys:
             print(f"⚠ FIGYELMEZTETÉS: Ismeretlen mező(k): {', '.join(unknown_keys)}")
@@ -734,6 +839,29 @@ class PowerZoneController:
             2: (z1_max + 1, z2_max),
             3: (z2_max + 1, self.max_watt)
         }
+
+    @property
+    def hr_zones(self):
+        max_hr = self.hr_zone_settings['max_hr']
+        z1_max = int(max_hr * self.hr_zone_settings['z1_max_percent'] / 100)
+        z2_max = int(max_hr * self.hr_zone_settings['z2_max_percent'] / 100)
+        return {
+            'resting_hr': self.hr_zone_settings['resting_hr'],
+            'z1_max': z1_max,
+            'z2_max': z2_max,
+        }
+
+    def get_hr_zone(self, hr):
+        if hr == 0 or hr < self.hr_zone_settings['resting_hr']:
+            return 0
+        max_hr = self.hr_zone_settings['max_hr']
+        z1_boundary = max_hr * self.hr_zone_settings['z1_max_percent'] / 100
+        z2_boundary = max_hr * self.hr_zone_settings['z2_max_percent'] / 100
+        if hr < z1_boundary:
+            return 1
+        if hr < z2_boundary:
+            return 2
+        return 3
 
     def is_valid_power(self, power):
         try:
@@ -810,26 +938,26 @@ class PowerZoneController:
         current_time = time.time()
 
         # --- 0W (leállás) kezelés explicit ---
-    if new_zone == 0:
-        if self.zero_power_immediate:
-            # Azonnali leállás (cooldown nélkül)
-            if self.current_zone != 0:
-                print(f"✓ 0W detektálva: azonnali leállás (cooldown nélkül)")
-                self.cooldown_active = False
-                self.pending_zone = None
-                return True
-            return False
-        else:
-            # Normál leállás (cooldown szükséges)
-            if self.current_zone != 0:
-                self.cooldown_active = True
-                self.cooldown_start_time = current_time
-                self.pending_zone = 0
-                print(f"🕐 0W detektálva: cooldown indítva {self.cooldown_seconds}s (cél: 0)")
+        if new_zone == 0:
+            if self.zero_power_immediate:
+                # Azonnali leállás (cooldown nélkül)
+                if self.current_zone != 0:
+                    print(f"✓ 0W detektálva: azonnali leállás (cooldown nélkül)")
+                    self.cooldown_active = False
+                    self.pending_zone = None
+                    return True
                 return False
             else:
-                # Már 0-ban vagyunk, nincs teendő
-                return False
+                # Normál leállás (cooldown szükséges)
+                if self.current_zone != 0:
+                    self.cooldown_active = True
+                    self.cooldown_start_time = current_time
+                    self.pending_zone = 0
+                    print(f"🕐 0W detektálva: cooldown indítva {self.cooldown_seconds}s (cél: 0)")
+                    return False
+                else:
+                    # Már 0-ban vagyunk, nincs teendő
+                    return False
 
         if self.cooldown_active:
             if new_zone >= self.current_zone:
@@ -873,9 +1001,21 @@ class PowerZoneController:
                 return
 
             avg_power = sum(self.power_buffer) // len(self.power_buffer)
-            new_zone = self.get_zone_for_power(avg_power)
+            new_power_zone = self.get_zone_for_power(avg_power)
+            self.current_power_zone = new_power_zone
 
-            print(f"Átlag teljesítmény: {avg_power}W | Jelenlegi zóna: {self.current_zone} | Új zóna: {new_zone}")
+            print(f"Átlag teljesítmény: {avg_power}W | Jelenlegi zóna: {self.current_zone} | Új zóna: {new_power_zone}")
+
+            zone_mode = self.hr_zone_settings.get('zone_mode', 'power_only') if self.hr_zone_settings.get('enabled', False) else 'power_only'
+
+            if zone_mode == 'hr_only':
+                # Power only tracked for dropout detection; HR drives the fan
+                return
+
+            if zone_mode == 'higher_wins' and self.current_hr_zone is not None:
+                new_zone = max(new_power_zone, self.current_hr_zone)
+            else:
+                new_zone = new_power_zone
 
             cooldown_send_zone = None
             if self.cooldown_active:
@@ -899,19 +1039,54 @@ class PowerZoneController:
         if hr <= 0 or hr > 250:
             return
         self.current_heart_rate = hr
-        print(f"❤ Szívfrekvencia: {hr} bpm")
+
+        if not self.hr_zone_settings.get('enabled', False):
+            print(f"❤ Szívfrekvencia: {hr} bpm")
+            return
+
+        self.hr_buffer.append(hr)
+        avg_hr = sum(self.hr_buffer) // len(self.hr_buffer)
+        new_hr_zone = self.get_hr_zone(avg_hr)
+        self.current_hr_zone = new_hr_zone
+
+        zone_mode = self.hr_zone_settings.get('zone_mode', 'power_only')
+        print(f"❤ HR: {avg_hr} bpm | HR zóna: {new_hr_zone}")
+
+        if zone_mode == 'power_only':
+            return
+
+        with self.state_lock:
+            if zone_mode == 'hr_only':
+                target_zone = new_hr_zone
+            else:  # higher_wins
+                target_zone = max(self.current_power_zone or 0, new_hr_zone)
+
+            cooldown_send_zone = None
+            if self.cooldown_active:
+                cooldown_send_zone = self.check_cooldown_and_apply(target_zone)
+
+            zone_change_send = None
+            if self.current_zone is None or self.should_change_zone(target_zone):
+                self.current_zone = target_zone
+                self.last_zone_change = time.time()
+                zone_change_send = target_zone
+
+        send_zone = cooldown_send_zone if cooldown_send_zone is not None else zone_change_send
+        if send_zone is not None:
+            self.ble.send_command_sync(send_zone)
 
 
 # ============================================================
 # ZwiftSource - Zwift UDP adatforrás
 # ============================================================
 class ZwiftSource:
-    def __init__(self, settings, callback):
+    def __init__(self, settings, callback, hr_callback=None):
         self.host = settings['host']
         self.port = settings['port']
         self.process_name = settings['process_name']
         self.check_interval = settings['check_interval']
         self.callback = callback
+        self.hr_callback = hr_callback
 
         self.running = False
         self.thread = None
@@ -1016,6 +1191,61 @@ class ZwiftSource:
 
         return None
 
+    def _parse_heart_rate(self, data):
+        """Parse heart rate (field 6) from Zwift UDP packet."""
+        if not data:
+            return None
+
+        if PROTOBUF_AVAILABLE:
+            try:
+                state = PlayerState()
+                state.ParseFromString(data)
+                hr = state.heart_rate
+                if isinstance(hr, (int, float)) and 1 <= hr <= 300:
+                    return int(hr)
+            except Exception:
+                pass
+
+        try:
+            if len(data) < 6:
+                return None
+
+            offset = 4
+
+            while offset < len(data) - 1:
+                tag_byte = data[offset]
+                field_number = tag_byte >> 3
+                wire_type = tag_byte & 0x07
+                offset += 1
+
+                if wire_type == 0:
+                    value, offset = self._read_varint(data, offset)
+                    if value is None:
+                        break
+                    if field_number == 6:
+                        if 1 <= value <= 300:
+                            return int(value)
+
+                elif wire_type == 2:
+                    length, offset = self._read_varint(data, offset)
+                    if length is None:
+                        break
+                    offset += length
+
+                elif wire_type == 5:
+                    offset += 4
+
+                elif wire_type == 1:
+                    offset += 8
+
+                else:
+                    break
+
+        except Exception:
+            pass
+
+        return None
+
     def _open_socket(self):
         try:
             self._close_socket()
@@ -1070,6 +1300,11 @@ class ZwiftSource:
 
                 if power is not None and self.active:
                     self.callback(power)
+
+                if self.hr_callback is not None and self.active:
+                    hr = self._parse_heart_rate(data)
+                    if hr is not None:
+                        self.hr_callback(hr)
 
             except socket.timeout:
                 continue
@@ -1262,11 +1497,13 @@ class DataSourceManager:
 
         self.primary = self.ds_settings['primary']
         self.fallback = self.ds_settings['fallback']
+        self.heart_rate_source = self.ds_settings.get('heart_rate_source', 'antplus')
 
         self.antplus_node = None
         self.antplus_devices = []
         self.antplus_last_data = 0
         self.antplus_startup_grace_end = 0
+        self.antplus_last_hr = 0
 
         self.grace_printed = False
         self.grace_expired_printed = False
@@ -1276,9 +1513,13 @@ class DataSourceManager:
         self.monitor_thread = None
 
         if self.primary == 'zwift' or self.fallback == 'zwift':
+            hr_cb = None
+            if self.heart_rate_source in ('zwift', 'both'):
+                hr_cb = self._on_zwift_hr
             self.zwift_source = ZwiftSource(
                 self.ds_settings['zwift'],
-                self.controller.process_power_data
+                self.controller.process_power_data,
+                hr_callback=hr_cb
             )
 
         self.bridge = BLEBridgeServer(settings)
@@ -1286,6 +1527,14 @@ class DataSourceManager:
     def _on_antplus_found(self, device):
         print(f"✓ ANT+ eszköz csatlakoztatva: {device}")
         self.antplus_last_data = time.time()
+
+    def _on_zwift_hr(self, hr):
+        """HR callback from Zwift - for 'both' mode only forwards if ANT+ HR is stale."""
+        if self.heart_rate_source == 'both':
+            dropout_timeout = self.settings.get('dropout_timeout', 5)
+            if time.time() - self.antplus_last_hr < dropout_timeout:
+                return  # ANT+ HR is still active, skip Zwift HR
+        self.controller.process_heart_rate_data(hr)
 
     def _on_antplus_data(self, page, page_name, data):
         if isinstance(data, PowerData):
@@ -1295,8 +1544,10 @@ class DataSourceManager:
             self.bridge.update_power(power)
         elif isinstance(data, HeartRateData):
             hr = data.heart_rate
-            self.controller.process_heart_rate_data(hr)
             self.bridge.update_heart_rate(hr)
+            if self.heart_rate_source != 'zwift':
+                self.antplus_last_hr = time.time()
+                self.controller.process_heart_rate_data(hr)
 
     def _register_antplus_device(self, device):
         self.antplus_devices.append(device)
