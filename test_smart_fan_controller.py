@@ -838,9 +838,10 @@ class TestHeartRateData(unittest.TestCase):
         self.assertEqual(self.controller.current_heart_rate, 1)
 
     def test_heart_rate_boundary_250(self):
-        """HR of 250 should be valid."""
+        """HR of 250 should be invalid (above max 220)."""
+        self.controller.process_heart_rate_data(100)
         self.controller.process_heart_rate_data(250)
-        self.assertEqual(self.controller.current_heart_rate, 250)
+        self.assertEqual(self.controller.current_heart_rate, 100)
 
 
 class TestBLEBridgeServer(unittest.TestCase):
@@ -997,6 +998,213 @@ class TestAntplusBridgeSettingsValidation(unittest.TestCase):
             controller.settings['antplus_bridge'],
             DEFAULT_SETTINGS['antplus_bridge']
         )
+
+
+class TestIsValidPowerExtended(unittest.TestCase):
+    """Test extended power validation: bool, NaN, Inf."""
+
+    def setUp(self):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['skip_connection'] = True
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings, f, indent=2)
+        f.close()
+        self._tmp = f.name
+        self.controller = PowerZoneController(f.name)
+
+    def tearDown(self):
+        if os.path.exists(self._tmp):
+            os.unlink(self._tmp)
+
+    def test_nan_invalid(self):
+        """NaN should be rejected."""
+        self.assertFalse(self.controller.is_valid_power(float('nan')))
+
+    def test_inf_invalid(self):
+        """Positive infinity should be rejected."""
+        self.assertFalse(self.controller.is_valid_power(float('inf')))
+
+    def test_negative_inf_invalid(self):
+        """Negative infinity should be rejected."""
+        self.assertFalse(self.controller.is_valid_power(float('-inf')))
+
+    def test_bool_true_invalid(self):
+        """True (bool) should be rejected despite being an int subtype."""
+        self.assertFalse(self.controller.is_valid_power(True))
+
+    def test_bool_false_invalid(self):
+        """False (bool) should be rejected despite being an int subtype."""
+        self.assertFalse(self.controller.is_valid_power(False))
+
+    def test_valid_zero(self):
+        """0 (int) should be valid."""
+        self.assertTrue(self.controller.is_valid_power(0))
+
+    def test_valid_positive(self):
+        """A normal positive watt value should be valid."""
+        self.assertTrue(self.controller.is_valid_power(200))
+
+
+class TestInvalidPowerDoesNotUpdateLastDataTime(unittest.TestCase):
+    """Test that invalid power data does not update last_data_time."""
+
+    def setUp(self):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['skip_connection'] = True
+        settings['minimum_samples'] = 1
+        settings['buffer_seconds'] = 1
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings, f, indent=2)
+        f.close()
+        self._tmp = f.name
+        self.controller = PowerZoneController(f.name)
+
+    def tearDown(self):
+        if os.path.exists(self._tmp):
+            os.unlink(self._tmp)
+
+    def test_invalid_power_does_not_update_last_data_time(self):
+        """Invalid power should NOT update last_data_time."""
+        old_time = self.controller.last_data_time
+        time.sleep(0.01)
+        self.controller.process_power_data(-999)
+        self.assertEqual(self.controller.last_data_time, old_time)
+
+    def test_nan_power_does_not_update_last_data_time(self):
+        """NaN power should NOT update last_data_time."""
+        old_time = self.controller.last_data_time
+        time.sleep(0.01)
+        self.controller.process_power_data(float('nan'))
+        self.assertEqual(self.controller.last_data_time, old_time)
+
+    def test_valid_power_updates_last_data_time(self):
+        """Valid power SHOULD update last_data_time."""
+        old_time = self.controller.last_data_time
+        time.sleep(0.01)
+        self.controller.process_power_data(100)
+        self.assertGreater(self.controller.last_data_time, old_time)
+
+
+class TestZwiftSourceSetActive(unittest.TestCase):
+    """Test ZwiftSource.set_active() method."""
+
+    def setUp(self):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        self.source = ZwiftSource(
+            settings['data_source']['zwift'],
+            callback=lambda x: None
+        )
+
+    def test_set_active_true(self):
+        """set_active(True) should make source active."""
+        self.source.set_active(True)
+        self.assertTrue(self.source.active)
+
+    def test_set_active_false(self):
+        """set_active(False) should make source inactive."""
+        self.source.set_active(True)
+        self.source.set_active(False)
+        self.assertFalse(self.source.active)
+
+    def test_set_active_toggle(self):
+        """Toggling active state should work correctly."""
+        self.source.set_active(True)
+        self.assertTrue(self.source.active)
+        self.source.set_active(False)
+        self.assertFalse(self.source.active)
+        self.source.set_active(True)
+        self.assertTrue(self.source.active)
+
+    def test_initial_active_is_false(self):
+        """Source should start inactive."""
+        self.assertFalse(self.source.active)
+
+    def test_set_active_method_exists(self):
+        """set_active should be a method, not a property."""
+        self.assertTrue(callable(self.source.set_active))
+
+
+class TestDataSourceManagerStopJoinsMonitorThread(unittest.TestCase):
+    """Test that DataSourceManager.stop() joins the monitor thread."""
+
+    def _make_settings(self):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['skip_connection'] = True
+        settings['data_source']['primary'] = 'zwift'
+        settings['data_source']['fallback'] = 'none'
+        return settings
+
+    def test_stop_joins_monitor_thread(self):
+        """stop() should join the monitor_thread."""
+        from smart_fan_controller import DataSourceManager
+        settings = self._make_settings()
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings, f, indent=2)
+        f.close()
+        try:
+            controller = PowerZoneController(f.name)
+            manager = DataSourceManager(settings, controller)
+            # Manually create a monitor_thread mock to track join calls
+            join_called = []
+            mock_thread = MagicMock()
+            mock_thread.is_alive.return_value = True
+            mock_thread.join.side_effect = lambda timeout=None: join_called.append(timeout)
+            manager.monitor_thread = mock_thread
+            manager.running = True
+            manager.stop()
+            self.assertTrue(len(join_called) > 0, "monitor_thread.join() was not called")
+        finally:
+            if os.path.exists(f.name):
+                os.unlink(f.name)
+
+    def test_stop_does_not_raise_when_no_monitor_thread(self):
+        """stop() should not raise if monitor_thread is None."""
+        from smart_fan_controller import DataSourceManager
+        settings = self._make_settings()
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings, f, indent=2)
+        f.close()
+        try:
+            controller = PowerZoneController(f.name)
+            manager = DataSourceManager(settings, controller)
+            manager.monitor_thread = None
+            manager.stop()  # should not raise
+        finally:
+            if os.path.exists(f.name):
+                os.unlink(f.name)
+
+
+class TestBLEBridgeServerStopTimeout(unittest.TestCase):
+    """Test BLEBridgeServer.stop() timeout warning."""
+
+    def test_stop_prints_warning_when_thread_does_not_stop(self):
+        """stop() should print a warning if the thread is still alive after join."""
+        bridge = BLEBridgeServer(DEFAULT_SETTINGS)
+        # Simulate a thread that never stops
+        mock_thread = MagicMock()
+        mock_thread.is_alive.return_value = True  # always alive
+        bridge._thread = mock_thread
+        import io
+        from contextlib import redirect_stdout
+        out = io.StringIO()
+        with redirect_stdout(out):
+            bridge.stop()
+        output = out.getvalue()
+        self.assertIn("BLE Bridge thread nem állt le időben", output)
+
+    def test_stop_no_warning_when_thread_stops_in_time(self):
+        """stop() should not print a warning if the thread stops."""
+        bridge = BLEBridgeServer(DEFAULT_SETTINGS)
+        mock_thread = MagicMock()
+        mock_thread.is_alive.return_value = False  # stopped
+        bridge._thread = mock_thread
+        import io
+        from contextlib import redirect_stdout
+        out = io.StringIO()
+        with redirect_stdout(out):
+            bridge.stop()
+        output = out.getvalue()
+        self.assertNotIn("BLE Bridge thread nem állt le időben", output)
 
 
 if __name__ == '__main__':
