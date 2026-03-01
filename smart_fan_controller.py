@@ -1363,7 +1363,7 @@ class PowerZoneController:
             - "higher_wins": a HR és teljesítmény zóna közül a nagyobb dönt
 
         Paraméterek:
-            hr (int|float): A szívfrekvencia bpm-ben (érvényes: 1–250).
+            hr (int|float): A szívfrekvencia bpm-ben (érvényes: 1–220).
         """
         try:
             hr = int(hr)
@@ -1563,7 +1563,7 @@ class ZwiftSource:
             data (bytes): A Zwift UDP csomag nyers bájtjai.
 
         Visszaad:
-            int|None: A szívfrekvencia bpm-ben (1–300), vagy None, ha nem sikerült.
+            int|None: A szívfrekvencia bpm-ben (1–220), vagy None, ha nem sikerült.
         """
         _, hr = self._parse_packet(data)
         return hr
@@ -1590,7 +1590,7 @@ class ZwiftSource:
                 power = state.power
                 power = int(power) if isinstance(power, (int, float)) and 0 <= power <= 10000 else None
                 hr = state.heart_rate
-                hr = int(hr) if isinstance(hr, (int, float)) and 1 <= hr <= 300 else None
+                hr = int(hr) if isinstance(hr, (int, float)) and 1 <= hr <= 220 else None
                 return power, hr
             except Exception:
                 pass
@@ -1617,7 +1617,7 @@ class ZwiftSource:
                     if field_number == 4:
                         power = int(value) if 0 <= value <= 10000 else None
                     elif field_number == 6:
-                        hr = int(value) if 1 <= value <= 300 else None
+                        hr = int(value) if 1 <= value <= 220 else None
 
                 elif wire_type == 2:
                     length, offset = self._read_varint(data, offset)

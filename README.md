@@ -54,11 +54,12 @@ Másold a `settings.example.jsonc` fájlt `settings.json` névre, és szerkeszd 
 | **bleak** | `≥0.21.0` | Bluetooth Low Energy (BLE) kliens | Kötelező |
 | **bless** | `≥0.3.0` | BLE periféria/szerver (ANT+ bridge-hez) | Opcionális* |
 | **protobuf** | `≥4.25.0` | Protocol Buffers | Kötelező |
-| **grpcio-tools** | `≥1.60.0` | Protobuf code generation | Kötelező |
+| **grpcio-tools** | `≥1.60.0` | Protobuf code generation | Fejlesztési** |
 | **psutil** | `≥5.9.0` | Folyamat figyelés (Zwift detektálás) | Opcionális* |
 
 \* *Ha `bless` nincs telepítve, az ANT+ bridge funkció automatikusan kikapcsol.*
 \* *Ha `psutil` nincs telepítve, a program feltételezi hogy a Zwift mindig fut.*
+\*\* *A `grpcio-tools` csak `.proto` fájl újragenerálásához szükséges (`zwift_pb2.py`); futtatáshoz elegendő a `protobuf` csomag.*
 
 ### Verzió ellenőrzés:
 
@@ -103,13 +104,13 @@ python zwift_simulator.py
 |------|--------|-----------------|
 | `ftp` | Funkcionális teljesítmény (W) | 180 |
 | `min_watt` | Minimális teljesítmény küszöb (W) | 0 |
-| `max_watt` | Maximális teljesítmény (W, 0 = FTP alapú) | 0 |
+| `max_watt` | Maximális teljesítmény (W, 0 = FTP alapú) | 1000 |
 | `cooldown_seconds` | Cooldown idő zóna csökkentésnél (s) | 120 |
-| `buffer_seconds` | Puffer idő zóna növelésnél (s) | 0 |
-| `minimum_samples` | Minimum minták száma döntés előtt | 1 |
+| `buffer_seconds` | Puffer idő zóna növelésnél (s) | 3 |
+| `minimum_samples` | Minimum minták száma döntés előtt | 8 |
 | `dropout_timeout` | Adatforrás kiesés timeout (s) | 5 |
 | `zero_power_immediate` | 0W esetén azonnali leállás | false |
-| `heart_rate_source` | HR forrás (`antplus`/`none`) | none |
+| `heart_rate_source` | HR forrás (`antplus`/`zwift`/`both`/`none`) | antplus |
 | `ble.skip_connection` | TEST MODE (BLE skip) | false |
 | `data_source.primary` | Elsődleges forrás (`antplus`/`zwift`) | antplus |
 | `data_source.fallback` | Másodlagos forrás (`zwift`/`none`) | zwift |
