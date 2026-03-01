@@ -1,5 +1,3 @@
-import sys
-import os
 import logging
 import json
 import math
@@ -237,10 +235,11 @@ class BLEController:
         Paraméterek:
             level (int): A ventilátor zóna szintje (0–3).
         """
-        if self.last_sent_command != level:
-            message = f"LEVEL:{level}"
-            print(f"🧪 TEST MODE - Parancs: {message}")
-            self.last_sent_command = level
+        with self._state_lock:
+            if self.last_sent_command != level:
+                message = f"LEVEL:{level}"
+                print(f"🧪 TEST MODE - Parancs: {message}")
+                self.last_sent_command = level
 
     async def _initial_connect(self):
         """Kezdeti BLE kapcsolat felépítése indításkor.
@@ -290,7 +289,11 @@ class BLEController:
         try:
             if self.client and await self._is_connected_async():
                 return True
-            self.client = BleakClient(self.device_address, timeout=self.connection_timeout)
+            self.client = BleakClient(
+                self.device_address,
+                timeout=self.connection_timeout,
+                disconnected_callback=self._on_disconnect
+            )
             await self.client.connect()
             if self.pin_code is not None:
                 print(f"🔗 BLE párosítás folyamatban: {self.device_address}")
@@ -306,7 +309,8 @@ class BLEController:
             return True
         except Exception as e:
             print(f"✗ Csatlakozási hiba: {e}")
-            self.is_connected = False
+            with self._state_lock:
+                self.is_connected = False
             self.client = None
             return False
 
@@ -323,17 +327,26 @@ class BLEController:
             pass
         return False
 
+    def _on_disconnect(self, client):
+        """Callback: BLE kapcsolat váratlan megszakadásakor hívódik meg."""
+        print("⚠ BLE kapcsolat váratlanul megszakadt")
+        with self._state_lock:
+            self.is_connected = False
+
     async def _disconnect_async(self):
         """Bontja a BLE kapcsolatot és felszabadítja a klienst."""
         if self.client:
             try:
-                await self.client.disconnect()
+                await asyncio.wait_for(self.client.disconnect(), timeout=5.0)
                 print("✓ BLE kapcsolat lezárva")
+            except asyncio.TimeoutError:
+                print("⚠ BLE disconnect timeout")
             except Exception:
                 pass
             finally:
-                self.is_connected = False
-                self.client = None
+                with self._state_lock:
+                    self.is_connected = False
+                    self.client = None
 
     async def _send_command_async(self, level):
         """Parancs aszinkron elküldése BLE-n, szükség esetén újracsatlakozással.
@@ -397,7 +410,8 @@ class BLEController:
             bool: True, ha a küldés sikeres; False egyébként.
         """
         if not await self._is_connected_async():
-            self.is_connected = False
+            with self._state_lock:
+                self.is_connected = False
             return False
         try:
             message = f"LEVEL:{level}"
@@ -408,16 +422,19 @@ class BLEController:
                 ),
                 timeout=self.command_timeout
             )
-            self.last_sent_command = level
+            with self._state_lock:
+                self.last_sent_command = level
             print(f"✓ Parancs elküldve: {message}")
             return True
         except asyncio.TimeoutError:
             print(f"✗ Parancs küldés timeout ({self.command_timeout}s)")
-            self.is_connected = False
+            with self._state_lock:
+                self.is_connected = False
             return False
         except Exception as e:
             print(f"✗ Küldési hiba: {e}")
-            self.is_connected = False
+            with self._state_lock:
+                self.is_connected = False
             return False
 
     def send_command_sync(self, level):
@@ -1125,10 +1142,10 @@ class PowerZoneController:
         Másodpercenként hívja a _dropout_check_loop.
         """
         current_time = time.time()
-        time_since_last_data = current_time - self.last_data_time
-
-        if time_since_last_data >= self.dropout_timeout:
-            with self.state_lock:
+        send_needed = False
+        with self.state_lock:
+            time_since_last_data = current_time - self.last_data_time
+            if time_since_last_data >= self.dropout_timeout:
                 if self.current_zone != 0:
                     print(f"⚠ Adatforrás kiesett ({time_since_last_data:.1f}s) → LEVEL:0")
                     self.current_zone = 0
@@ -1136,18 +1153,17 @@ class PowerZoneController:
                     self.pending_zone = None
                     self.power_buffer.clear()
                     send_needed = True
-                else:
-                    send_needed = False
 
-            if send_needed:
-                self.ble.send_command_sync(0)
+        if send_needed:
+            self.ble.send_command_sync(0)
 
     def check_cooldown_and_apply(self, new_zone):
         """Ellenőrzi, hogy a cooldown lejárt-e, és szükség esetén alkalmazza az új zónát.
 
         Ha a cooldown_seconds idő eltelt, végrehajtja a zónaváltást.
         Ha még nem járt le, frissíti a várakozó zónát, és 10 másodpercenként
-        kiírja a hátralévő időt.
+        kiírja a hátralévő időt. Ha a zóna a jelenlegi fölé emelkedik, a cooldown
+        azonnal törlésre kerül.
 
         Paraméterek:
             new_zone (int): Az alkalmazni kívánt célzóna (0–3).
@@ -1156,8 +1172,18 @@ class PowerZoneController:
             int|None: A küldendő zóna szintje, ha zónaváltás történt; None egyébként.
         """
         current_time = time.time()
-        time_elapsed = current_time - self.cooldown_start_time
         send_zone = None
+
+        # Zone increase during cooldown: cancel immediately
+        if new_zone > self.current_zone:
+            print(f"✓ Teljesítmény emelkedés: cooldown törölve (új zóna: {new_zone} >= jelenlegi: {self.current_zone})")
+            self.cooldown_active = False
+            self.pending_zone = None
+            self.current_zone = new_zone
+            self.last_zone_change = current_time
+            return new_zone
+
+        time_elapsed = current_time - self.cooldown_start_time
 
         if time_elapsed >= self.cooldown_seconds:
             self.cooldown_active = False
@@ -1303,11 +1329,10 @@ class PowerZoneController:
                 new_zone = new_power_zone
 
             cooldown_send_zone = None
+            zone_change_send = None
             if self.cooldown_active:
                 cooldown_send_zone = self.check_cooldown_and_apply(new_zone)
-
-            zone_change_send = None
-            if self.current_zone is None or self.should_change_zone(new_zone):
+            elif self.current_zone is None or self.should_change_zone(new_zone):
                 self.current_zone = new_zone
                 self.last_zone_change = time.time()
                 zone_change_send = new_zone
@@ -1360,11 +1385,10 @@ class PowerZoneController:
                 target_zone = max(self.current_power_zone or 0, new_hr_zone)
 
             cooldown_send_zone = None
+            zone_change_send = None
             if self.cooldown_active:
                 cooldown_send_zone = self.check_cooldown_and_apply(target_zone)
-
-            zone_change_send = None
-            if self.current_zone is None or self.should_change_zone(target_zone):
+            elif self.current_zone is None or self.should_change_zone(target_zone):
                 self.current_zone = target_zone
                 self.last_zone_change = time.time()
                 zone_change_send = target_zone
@@ -1451,9 +1475,12 @@ class ZwiftSource:
             return True
         try:
             for proc in psutil.process_iter(['name']):
-                if proc.info['name'] and \
-                   self.process_name.lower() in proc.info['name'].lower():
-                    return True
+                try:
+                    name = proc.info.get('name')
+                    if name and self.process_name.lower() in name.lower():
+                        return True
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
         except Exception:
             pass
         return False
@@ -1494,60 +1521,8 @@ class ZwiftSource:
         Visszaad:
             int|None: A teljesítmény wattban (0–10000), vagy None, ha nem sikerült.
         """
-        if not data:
-            return None
-
-        if PROTOBUF_AVAILABLE:
-            try:
-                state = PlayerState()
-                state.ParseFromString(data)
-                power = state.power
-                if isinstance(power, (int, float)) and 0 <= power <= 10000:
-                    return int(power)
-            except Exception:
-                pass
-
-        try:
-            if len(data) < 6:
-                return None
-
-            offset = 4
-
-            while offset < len(data) - 1:
-                tag_byte = data[offset]
-                field_number = tag_byte >> 3
-                wire_type = tag_byte & 0x07
-                offset += 1
-
-                if wire_type == 0:
-                    value, offset = self._read_varint(data, offset)
-                    if value is None:
-                        break
-                    if field_number == 4:
-                        if 0 <= value <= 10000:
-                            return int(value)
-                        else:
-                            return None
-
-                elif wire_type == 2:
-                    length, offset = self._read_varint(data, offset)
-                    if length is None:
-                        break
-                    offset += length
-
-                elif wire_type == 5:
-                    offset += 4
-
-                elif wire_type == 1:
-                    offset += 8
-
-                else:
-                    break
-
-        except Exception:
-            pass
-
-        return None
+        power, _ = self._parse_packet(data)
+        return power
 
     def _parse_heart_rate(self, data):
         """Szívfrekvencia érték kinyerése Zwift UDP csomagból (field 6).
@@ -1561,38 +1536,59 @@ class ZwiftSource:
         Visszaad:
             int|None: A szívfrekvencia bpm-ben (1–300), vagy None, ha nem sikerült.
         """
+        _, hr = self._parse_packet(data)
+        return hr
+
+    def _parse_packet(self, data):
+        """Teljesítmény és szívfrekvencia egyszeri kinyerése Zwift UDP csomagból.
+
+        Egyszeri protobuf (vagy kézi varint) parse-szal adja vissza mindkettőt,
+        elkerülve a dupla parse-t a _listen_loop-ban.
+
+        Paraméterek:
+            data (bytes): A Zwift UDP csomag nyers bájtjai.
+
+        Visszaad:
+            tuple: (power, hr) – mindkettő int|None.
+        """
         if not data:
-            return None
+            return None, None
 
         if PROTOBUF_AVAILABLE:
             try:
                 state = PlayerState()
                 state.ParseFromString(data)
+                power = state.power
+                power = int(power) if isinstance(power, (int, float)) and 0 <= power <= 10000 else None
                 hr = state.heart_rate
-                if isinstance(hr, (int, float)) and 1 <= hr <= 300:
-                    return int(hr)
+                hr = int(hr) if isinstance(hr, (int, float)) and 1 <= hr <= 300 else None
+                return power, hr
             except Exception:
                 pass
 
         try:
             if len(data) < 6:
-                return None
+                return None, None
 
             offset = 4
+            power = None
+            hr = None
 
             while offset < len(data) - 1:
-                tag_byte = data[offset]
-                field_number = tag_byte >> 3
-                wire_type = tag_byte & 0x07
-                offset += 1
+                tag, offset = self._read_varint(data, offset)
+                if tag is None:
+                    break
+                field_number = tag >> 3
+                wire_type = tag & 0x07
 
                 if wire_type == 0:
                     value, offset = self._read_varint(data, offset)
                     if value is None:
                         break
-                    if field_number == 6:
-                        if 1 <= value <= 300:
-                            return int(value)
+                    if field_number == 4:
+                        power = int(value) if 0 <= value <= 10000 else None
+                    elif field_number == 6:
+                        hr = int(value) if 1 <= value <= 300 else None
 
                 elif wire_type == 2:
                     length, offset = self._read_varint(data, offset)
@@ -1609,10 +1605,12 @@ class ZwiftSource:
                 else:
                     break
 
+            return power, hr
+
         except Exception:
             pass
 
-        return None
+        return None, None
 
     def _open_socket(self):
         """Megnyitja az UDP socket-et a Zwift adatok fogadásához."""
@@ -1674,13 +1672,12 @@ class ZwiftSource:
 
             try:
                 data, addr = self.sock.recvfrom(4096)
-                power = self._parse_power(data)
+                power, hr = self._parse_packet(data)
 
                 if power is not None and self.active:
                     self.callback(power)
 
                 if self.hr_callback is not None and self.active:
-                    hr = self._parse_heart_rate(data)
                     if hr is not None:
                         self.hr_callback(hr)
 
@@ -2117,8 +2114,12 @@ class DataSourceManager:
         while self.running:
             try:
                 self.antplus_node.start()
-                retry_count = 0
-                break
+                # Ha ide ér, az ANT+ node leállt (pl. dongle kihúzva)
+                if not self.running:
+                    break
+                retry_count += 1
+                print(f"⚠ ANT+ node leállt, újraindítás...")
+                self.antplus_last_data = 0
 
             except Exception as e:
                 if not self.running:
