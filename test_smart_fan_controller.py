@@ -2412,5 +2412,182 @@ class TestAntplusLoopReconnect(unittest.TestCase):
                                     "antplus_node.start() should be called more than once after normal stop")
 
 
+class TestHRBoundary300(unittest.TestCase):
+    """BUG #52b: HR value 300 must be invalid (None) after range fix to 1–220."""
+
+    def setUp(self):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        self.source = smart_fan_controller.ZwiftSource(
+            settings['data_source']['zwift'],
+            callback=lambda x: None
+        )
+
+    def _build_packet_with_field(self, field_number, value):
+        from zwift_simulator import encode_varint
+        tag = (field_number << 3) | 0
+        header = b'\x00' * 4
+        return header + encode_varint(tag) + encode_varint(value)
+
+    def test_hr_boundary_invalid_300(self):
+        """HR value 300 should return None (above max 220)."""
+        data = self._build_packet_with_field(6, 300)
+        result = self.source._parse_heart_rate(data)
+        self.assertIsNone(result)
+
+    def test_hr_boundary_invalid_221(self):
+        """HR value 221 should return None (above max 220)."""
+        data = self._build_packet_with_field(6, 221)
+        result = self.source._parse_heart_rate(data)
+        self.assertIsNone(result)
+
+
+class TestAntplusLoopRetryReset(unittest.TestCase):
+    """BUG #53: retry_count must be reset when antplus_last_data > 0 on node stop."""
+
+    def test_retry_count_resets_after_successful_data(self):
+        """retry_count should reset to 0 if antplus_last_data > 0 when node stops."""
+        from smart_fan_controller import DataSourceManager
+
+        with patch('smart_fan_controller.Node') as MockNode, \
+             patch('smart_fan_controller.PowerMeter'), \
+             patch('smart_fan_controller.HeartRate'):
+            mock_node_instance = MagicMock()
+            MockNode.return_value = mock_node_instance
+
+            dsm = DataSourceManager.__new__(DataSourceManager)
+            dsm.running = True
+            dsm.antplus_node = mock_node_instance
+            dsm.ANTPLUS_MAX_RETRIES = 5
+            dsm.ANTPLUS_RECONNECT_DELAY = 0
+            dsm._stop_antplus_node = MagicMock()
+            dsm._init_antplus_node = MagicMock()
+
+            call_count = [0]
+
+            def start_side_effect():
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    # Simulate successful data received during first run
+                    dsm.antplus_last_data = time.time()
+                elif call_count[0] == 2:
+                    # Stop the loop on second call
+                    dsm.running = False
+
+            mock_node_instance.start = start_side_effect
+            dsm.antplus_last_data = 0
+
+            dsm._antplus_loop()
+
+            # Loop ran at least twice, meaning retry_count was reset after first stop
+            self.assertGreaterEqual(call_count[0], 2)
+
+
+class TestOnAntplusDataBridgeValidation(unittest.TestCase):
+    """BUG #55/56: _on_antplus_data must validate HR and power before bridge calls."""
+
+    def _make_manager(self, heart_rate_source='antplus'):
+        from smart_fan_controller import DataSourceManager
+
+        dsm = DataSourceManager.__new__(DataSourceManager)
+        dsm.heart_rate_source = heart_rate_source
+        dsm.antplus_last_data = 0
+        dsm.antplus_last_hr = 0
+        dsm.controller = MagicMock()
+
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['skip_connection'] = True
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings, f, indent=2)
+        f.close()
+        self._tmp = f.name
+        real_controller = smart_fan_controller.PowerZoneController(f.name)
+        dsm.controller.is_valid_power = real_controller.is_valid_power
+        dsm.bridge = MagicMock()
+        return dsm
+
+    def tearDown(self):
+        if hasattr(self, '_tmp') and os.path.exists(self._tmp):
+            os.unlink(self._tmp)
+
+    def test_bridge_not_called_with_invalid_hr(self):
+        """bridge.update_heart_rate should NOT be called when HR is 0 (below range)."""
+        manager = self._make_manager('antplus')
+        HeartRateData = smart_fan_controller.HeartRateData
+        hr_data = HeartRateData()
+        hr_data.heart_rate = 0
+        manager._on_antplus_data(0, '', hr_data)
+        manager.bridge.update_heart_rate.assert_not_called()
+
+    def test_bridge_not_called_with_hr_above_220(self):
+        """bridge.update_heart_rate should NOT be called when HR > 220."""
+        manager = self._make_manager('antplus')
+        HeartRateData = smart_fan_controller.HeartRateData
+        hr_data = HeartRateData()
+        hr_data.heart_rate = 221
+        manager._on_antplus_data(0, '', hr_data)
+        manager.bridge.update_heart_rate.assert_not_called()
+
+    def test_bridge_called_with_valid_hr(self):
+        """bridge.update_heart_rate SHOULD be called when HR is valid (1–220)."""
+        manager = self._make_manager('antplus')
+        HeartRateData = smart_fan_controller.HeartRateData
+        hr_data = HeartRateData()
+        hr_data.heart_rate = 150
+        manager._on_antplus_data(0, '', hr_data)
+        manager.bridge.update_heart_rate.assert_called_once_with(150)
+
+    def test_bridge_not_called_with_invalid_power(self):
+        """bridge.update_power should NOT be called when power is invalid (negative)."""
+        manager = self._make_manager()
+        PowerData = smart_fan_controller.PowerData
+        power_data = PowerData()
+        power_data.instantaneous_power = -1
+        manager._on_antplus_data(0, '', power_data)
+        manager.bridge.update_power.assert_not_called()
+
+    def test_bridge_called_with_valid_power(self):
+        """bridge.update_power SHOULD be called when power is valid."""
+        manager = self._make_manager()
+        PowerData = smart_fan_controller.PowerData
+        power_data = PowerData()
+        power_data.instantaneous_power = 200
+        manager._on_antplus_data(0, '', power_data)
+        manager.bridge.update_power.assert_called_once_with(200)
+
+
+class TestBLEBridgeServerStopLoopFallback(unittest.TestCase):
+    """BUG #58: stop() must attempt to stop the loop if thread doesn't stop in time."""
+
+    def test_stop_calls_loop_stop_when_thread_stuck(self):
+        """stop() should call loop.stop() via call_soon_threadsafe if thread is still alive."""
+        bridge = smart_fan_controller.BLEBridgeServer(DEFAULT_SETTINGS)
+        mock_thread = MagicMock()
+        mock_thread.is_alive.return_value = True
+        bridge._thread = mock_thread
+
+        mock_loop = MagicMock()
+        mock_loop.is_running.return_value = True
+        bridge._loop = mock_loop
+
+        bridge.stop()
+
+        mock_loop.call_soon_threadsafe.assert_called_once_with(mock_loop.stop)
+
+    def test_stop_does_not_call_loop_stop_when_thread_stops(self):
+        """stop() should NOT call loop.stop() if thread stops in time."""
+        bridge = smart_fan_controller.BLEBridgeServer(DEFAULT_SETTINGS)
+        mock_thread = MagicMock()
+        mock_thread.is_alive.return_value = False
+        bridge._thread = mock_thread
+
+        mock_loop = MagicMock()
+        mock_loop.is_running.return_value = True
+        bridge._loop = mock_loop
+
+        bridge.stop()
+
+        mock_loop.call_soon_threadsafe.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -1945,7 +1945,10 @@ class BLEBridgeServer:
         if not self._running or not self._server or not self.hr_service_enabled:
             return
         try:
-            hr = max(0, min(255, int(hr_bpm)))
+            raw_hr = int(hr_bpm)
+            hr = max(0, min(255, raw_hr))
+            if hr != raw_hr:
+                print(f"⚠ BLE Bridge HR clampolva: {raw_hr} → {hr}")
             value = bytearray([0x00, hr])
             if self._loop:
                 self._loop.call_soon_threadsafe(self._do_update_heart_rate, value)
@@ -1959,6 +1962,8 @@ class BLEBridgeServer:
             self._thread.join(timeout=5)
             if self._thread.is_alive():
                 print("⚠ BLE Bridge thread nem állt le időben")
+                if self._loop and self._loop.is_running():
+                    self._loop.call_soon_threadsafe(self._loop.stop)
 
 
 # ============================================================
@@ -2079,13 +2084,15 @@ class DataSourceManager:
             self.antplus_last_data = time.time()
             power = data.instantaneous_power
             self.controller.process_power_data(power)
-            self.bridge.update_power(power)
+            if self.controller.is_valid_power(power):
+                self.bridge.update_power(int(power))
         elif isinstance(data, HeartRateData):
             hr = data.heart_rate
             if self.heart_rate_source != 'zwift':
                 self.antplus_last_hr = time.time()
                 self.controller.process_heart_rate_data(hr)
-                self.bridge.update_heart_rate(hr)
+                if isinstance(hr, (int, float)) and 1 <= int(hr) <= 220:
+                    self.bridge.update_heart_rate(int(hr))
 
     def _register_antplus_device(self, device):
         """ANT+ eszköz regisztrálása – callback-ek beállítása.
@@ -2156,8 +2163,11 @@ class DataSourceManager:
                 # Ha ide ér, az ANT+ node leállt (pl. dongle kihúzva)
                 if not self.running:
                     break
+                # Ha volt sikeres adat a futás során, reseteljük a retry_count-ot
+                if self.antplus_last_data > 0:
+                    retry_count = 0
                 retry_count += 1
-                print(f"⚠ ANT+ node leállt, újraindítás...")
+                print(f"⚠ ANT+ node leállt, újraindítás... ({retry_count}/{self.ANTPLUS_MAX_RETRIES})")
                 self.antplus_last_data = 0
 
             except Exception as e:
