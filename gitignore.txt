@@ -28,3 +28,14 @@ zwift_pb2.py
 
 # Settings (ha személyes adatokat tartalmaz)
 # settings.json
+
+# Test
+.pytest_cache/
+htmlcov/
+.coverage
+
+# Documentation artifacts
+*.bak
+
+# Compiled protobuf (generált, ne legyen a repoban ha újra generálható)
+# zwift_pb2.py  -- már fentebb szerepel
