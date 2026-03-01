@@ -452,6 +452,9 @@ class BLEController:
         Jelzi a szálnak a leállást (running=False), majd megvárja
         legfeljebb 5 másodpercig a szál befejezését.
         """
+        if not self.running:
+            return
+        print("🛑 BLE thread leállítása...")
         self.running = False
         if self.thread and self.thread.is_alive():
             self.thread.join(timeout=5)
@@ -1633,6 +1636,7 @@ class ZwiftSource:
         Az érkező csomagokból kinyeri a teljesítményt és/vagy a HR-t,
         és csak akkor adja át a callback-nek, ha a forrás aktív.
         """
+        last_zwift_check = 0
 
         while self.running:
             current_time = time.time()
@@ -1954,6 +1958,7 @@ class DataSourceManager:
             controller (PowerZoneController): A vezérlő példány, amelynek a
                 power/HR adatokat átadja.
         """
+        self.settings = settings
         self.controller = controller
         self.ds_settings = settings['data_source']
 
@@ -2041,6 +2046,7 @@ class DataSourceManager:
         Paraméterek:
             device: Az ANT+ eszköz objektuma (pl. PowerMeter, HeartRate).
         """
+        self.antplus_devices.append(device)
         device.on_found = lambda: self._on_antplus_found(device)
         device.on_device_data = self._on_antplus_data
 
@@ -2050,6 +2056,7 @@ class DataSourceManager:
         Mindig létrehoz egy PowerMeter-t. Ha az antplus_bridge és a
         heart_rate figyelés engedélyezett, egy HeartRate monitort is regisztrál.
         """
+        self.antplus_node = Node()
         self.antplus_node.set_network_key(0x00, ANTPLUS_NETWORK_KEY)
 
         self.antplus_devices = []
@@ -2094,6 +2101,7 @@ class DataSourceManager:
         másodpercenként újrapróbálkozik, maximum ANTPLUS_MAX_RETRIES kísérletig.
         Ha eléri a maximumot, leáll (Zwift fallback marad aktív).
         """
+        retry_count = 0
 
         while self.running:
             try:
@@ -2164,6 +2172,7 @@ class DataSourceManager:
 
         30 másodpercenként kiírja az adatforrás státuszt a konzolra.
         """
+        check_interval = self.ds_settings['zwift']['check_interval']
         dropout_timeout = self.settings['dropout_timeout']
         last_source_print = 0
         last_antplus_ok = None
@@ -2224,6 +2233,7 @@ class DataSourceManager:
             3. Adatforrás monitor szál
             4. BLE Bridge szerver
         """
+        self.running = True
 
         print(f"📡 Elsődleges adatforrás: {self.primary.upper()}")
         if self.fallback != 'none':
@@ -2255,6 +2265,7 @@ class DataSourceManager:
 
     def stop(self):
         """Leállítja az összes adatforrást és a BLE Bridge-et."""
+        self.running = False
 
         try:
             self._stop_antplus()
@@ -2288,6 +2299,7 @@ def main():
         6. Főciklus: Ctrl+C megvárása
         7. Leállítás: DataSource, Dropout, BLE tiszta leállítása
     """
+    logging.disable(logging.CRITICAL)
 
     devnull = open(os.devnull, 'w')
     sys.stderr = devnull
