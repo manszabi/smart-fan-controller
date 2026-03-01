@@ -2123,13 +2123,13 @@ class TestParseHeartRateInvalidReturnsNone(unittest.TestCase):
         return header + encode_varint(tag) + encode_varint(value)
 
     def test_hr_out_of_range_high_returns_none(self):
-        """HR value > 300 should return None."""
-        data = self._build_packet_with_field(6, 301)
+        """HR value > 220 should return None."""
+        data = self._build_packet_with_field(6, 221)
         result = self.source._parse_heart_rate(data)
         self.assertIsNone(result)
 
     def test_hr_zero_returns_none(self):
-        """HR value 0 (below range 1-300) should return None."""
+        """HR value 0 (below range 1-220) should return None."""
         data = self._build_packet_with_field(6, 0)
         result = self.source._parse_heart_rate(data)
         self.assertIsNone(result)
@@ -2140,11 +2140,11 @@ class TestParseHeartRateInvalidReturnsNone(unittest.TestCase):
         result = self.source._parse_heart_rate(data)
         self.assertEqual(result, 1)
 
-    def test_hr_boundary_valid_300(self):
-        """HR value 300 (maximum valid) should return 300."""
-        data = self._build_packet_with_field(6, 300)
+    def test_hr_boundary_valid_220(self):
+        """HR value 220 (maximum valid) should return 220."""
+        data = self._build_packet_with_field(6, 220)
         result = self.source._parse_heart_rate(data)
-        self.assertEqual(result, 300)
+        self.assertEqual(result, 220)
 
 
 class TestParsePacketCombined(unittest.TestCase):

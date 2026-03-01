@@ -43,6 +43,8 @@ def create_zwift_udp_packet(power, cadence=85, heart_rate=140):
 
 def encode_varint(value):
     """Protobuf varint kódolás"""
+    if value < 0:
+        raise ValueError(f"encode_varint: negatív érték nem megengedett: {value}")
     result = []
     while value > 0x7F:
         result.append((value & 0x7F) | 0x80)
@@ -138,6 +140,8 @@ def simulate_ride():
         
     except KeyboardInterrupt:
         print("\n\n⏹  Szimuláció megszakítva")
+    except OSError as e:
+        print(f"\n✗ Hálózati hiba: {e}")
     finally:
         sock.close()
         print("✓ Socket bezárva")
