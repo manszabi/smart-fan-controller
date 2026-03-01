@@ -20,11 +20,13 @@
     "max_retries": 10,
     "command_timeout": 3,
     "service_uuid": "0000ffe0-0000-1000-8000-00805f9b34fb",
-    "characteristic_uuid": "0000ffe1-0000-1000-8000-00805f9b34fb"
+    "characteristic_uuid": "0000ffe1-0000-1000-8000-00805f9b34fb",
+    "pin_code": null
   },
   "data_source": {
     "primary": "antplus",
     "fallback": "zwift",
+    "heart_rate_source": "antplus",
     "zwift": {
       "port": 3022,
       "host": "127.0.0.1",
@@ -44,5 +46,13 @@
       "heart_rate_service": true,
       "device_name": "SmartFanBridge"
     }
+  },
+  "heart_rate_zones": {
+    "enabled": false,
+    "max_hr": 185,
+    "resting_hr": 60,
+    "zone_mode": "power_only",
+    "z1_max_percent": 70,
+    "z2_max_percent": 80
   }
 }

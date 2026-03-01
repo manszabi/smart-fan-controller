@@ -39,6 +39,7 @@ from smart_fan_controller import (
     PowerZoneController,
     BLEController,
     BLEBridgeServer,
+    ZwiftSource,
     DEFAULT_SETTINGS,
 )
 
@@ -1000,3 +1001,450 @@ class TestAntplusBridgeSettingsValidation(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestBLEPINSettings(unittest.TestCase):
+    """Test BLE PIN code settings validation."""
+
+    def _create_settings_file(self, settings_dict):
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings_dict, f, indent=2)
+        f.close()
+        return f.name
+
+    def tearDown(self):
+        if hasattr(self, '_settings_file') and os.path.exists(self._settings_file):
+            os.unlink(self._settings_file)
+
+    def test_default_pin_code_is_none(self):
+        """Default pin_code should be None."""
+        self.assertIsNone(DEFAULT_SETTINGS['ble'].get('pin_code'))
+
+    def test_valid_pin_code(self):
+        """Valid pin_code in 0-999999 range should be accepted."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['pin_code'] = 123456
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['ble']['pin_code'], 123456)
+
+    def test_pin_code_zero(self):
+        """pin_code of 0 should be accepted."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['pin_code'] = 0
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['ble']['pin_code'], 0)
+
+    def test_pin_code_max(self):
+        """pin_code of 999999 should be accepted."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['pin_code'] = 999999
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['ble']['pin_code'], 999999)
+
+    def test_pin_code_null(self):
+        """pin_code of null (None) should be accepted."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['pin_code'] = None
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertIsNone(controller.settings['ble']['pin_code'])
+
+    def test_invalid_pin_code_too_large(self):
+        """pin_code above 999999 should fall back to default."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['pin_code'] = 1000000
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertIsNone(controller.settings['ble']['pin_code'])
+
+    def test_invalid_pin_code_negative(self):
+        """Negative pin_code should fall back to default."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['pin_code'] = -1
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertIsNone(controller.settings['ble']['pin_code'])
+
+    def test_invalid_pin_code_bool(self):
+        """Boolean pin_code should be rejected."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['pin_code'] = True
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertIsNone(controller.settings['ble']['pin_code'])
+
+    def test_ble_controller_stores_pin_code(self):
+        """BLEController should store pin_code from settings."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['pin_code'] = 123456
+        ble = BLEController(settings)
+        self.assertEqual(ble.pin_code, 123456)
+
+    def test_ble_controller_none_pin_code(self):
+        """BLEController should store None pin_code."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['pin_code'] = None
+        ble = BLEController(settings)
+        self.assertIsNone(ble.pin_code)
+
+
+class TestHeartRateSource(unittest.TestCase):
+    """Test heart_rate_source settings validation."""
+
+    def _create_settings_file(self, settings_dict):
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings_dict, f, indent=2)
+        f.close()
+        return f.name
+
+    def tearDown(self):
+        if hasattr(self, '_settings_file') and os.path.exists(self._settings_file):
+            os.unlink(self._settings_file)
+
+    def test_default_heart_rate_source(self):
+        """Default heart_rate_source should be 'antplus'."""
+        self.assertEqual(DEFAULT_SETTINGS['data_source']['heart_rate_source'], 'antplus')
+
+    def test_valid_heart_rate_source_antplus(self):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['heart_rate_source'] = 'antplus'
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['data_source']['heart_rate_source'], 'antplus')
+
+    def test_valid_heart_rate_source_zwift(self):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['heart_rate_source'] = 'zwift'
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['data_source']['heart_rate_source'], 'zwift')
+
+    def test_valid_heart_rate_source_both(self):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['heart_rate_source'] = 'both'
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['data_source']['heart_rate_source'], 'both')
+
+    def test_invalid_heart_rate_source_uses_default(self):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['heart_rate_source'] = 'bluetooth'
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['data_source']['heart_rate_source'],
+                         DEFAULT_SETTINGS['data_source']['heart_rate_source'])
+
+
+class TestHRZoneSettings(unittest.TestCase):
+    """Test heart_rate_zones settings validation."""
+
+    def _create_settings_file(self, settings_dict):
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings_dict, f, indent=2)
+        f.close()
+        return f.name
+
+    def tearDown(self):
+        if hasattr(self, '_settings_file') and os.path.exists(self._settings_file):
+            os.unlink(self._settings_file)
+
+    def test_default_hr_zones_disabled(self):
+        """HR zones should be disabled by default."""
+        self.assertFalse(DEFAULT_SETTINGS['heart_rate_zones']['enabled'])
+
+    def test_default_zone_mode_power_only(self):
+        """Default zone_mode should be 'power_only'."""
+        self.assertEqual(DEFAULT_SETTINGS['heart_rate_zones']['zone_mode'], 'power_only')
+
+    def test_valid_hr_zone_settings(self):
+        """Valid HR zone settings should be accepted."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['heart_rate_zones'] = {
+            'enabled': True,
+            'max_hr': 185,
+            'resting_hr': 60,
+            'zone_mode': 'hr_only',
+            'z1_max_percent': 70,
+            'z2_max_percent': 80
+        }
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertTrue(controller.settings['heart_rate_zones']['enabled'])
+        self.assertEqual(controller.settings['heart_rate_zones']['zone_mode'], 'hr_only')
+
+    def test_invalid_max_hr_too_low(self):
+        """max_hr below 100 should fall back to default."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['heart_rate_zones']['max_hr'] = 50
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['heart_rate_zones']['max_hr'],
+                         DEFAULT_SETTINGS['heart_rate_zones']['max_hr'])
+
+    def test_invalid_max_hr_too_high(self):
+        """max_hr above 220 should fall back to default."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['heart_rate_zones']['max_hr'] = 250
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['heart_rate_zones']['max_hr'],
+                         DEFAULT_SETTINGS['heart_rate_zones']['max_hr'])
+
+    def test_invalid_resting_hr(self):
+        """resting_hr outside 30-100 should fall back to default."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['heart_rate_zones']['resting_hr'] = 20
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['heart_rate_zones']['resting_hr'],
+                         DEFAULT_SETTINGS['heart_rate_zones']['resting_hr'])
+
+    def test_invalid_zone_mode(self):
+        """Invalid zone_mode should fall back to default."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['heart_rate_zones']['zone_mode'] = 'invalid'
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['heart_rate_zones']['zone_mode'],
+                         DEFAULT_SETTINGS['heart_rate_zones']['zone_mode'])
+
+    def test_valid_zone_modes(self):
+        """All valid zone modes should be accepted."""
+        for mode in ('hr_only', 'higher_wins', 'power_only'):
+            settings = copy.deepcopy(DEFAULT_SETTINGS)
+            settings['heart_rate_zones']['zone_mode'] = mode
+            tmp_file = self._create_settings_file(settings)
+            controller = PowerZoneController(tmp_file)
+            self.assertEqual(controller.settings['heart_rate_zones']['zone_mode'], mode)
+            os.unlink(tmp_file)
+
+    def test_z1_gte_z2_reverts_to_defaults(self):
+        """z1_max_percent >= z2_max_percent should revert to defaults."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['heart_rate_zones']['z1_max_percent'] = 80
+        settings['heart_rate_zones']['z2_max_percent'] = 70
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['heart_rate_zones']['z1_max_percent'],
+                         DEFAULT_SETTINGS['heart_rate_zones']['z1_max_percent'])
+        self.assertEqual(controller.settings['heart_rate_zones']['z2_max_percent'],
+                         DEFAULT_SETTINGS['heart_rate_zones']['z2_max_percent'])
+
+    def test_invalid_enabled_bool(self):
+        """Non-bool enabled should fall back to default."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['heart_rate_zones']['enabled'] = 'yes'
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['heart_rate_zones']['enabled'],
+                         DEFAULT_SETTINGS['heart_rate_zones']['enabled'])
+
+
+class TestGetHRZone(unittest.TestCase):
+    """Test HR zone calculation."""
+
+    def setUp(self):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['skip_connection'] = True
+        settings['heart_rate_zones'] = {
+            'enabled': True,
+            'max_hr': 185,
+            'resting_hr': 60,
+            'zone_mode': 'hr_only',
+            'z1_max_percent': 70,
+            'z2_max_percent': 80
+        }
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings, f, indent=2)
+        f.close()
+        self._tmp = f.name
+        self.controller = PowerZoneController(f.name)
+
+    def tearDown(self):
+        if os.path.exists(self._tmp):
+            os.unlink(self._tmp)
+
+    def test_zero_hr_is_zone_0(self):
+        """HR == 0 should return zone 0."""
+        # HR of 0 is rejected by process_heart_rate_data but get_hr_zone handles it
+        self.assertEqual(self.controller.get_hr_zone(0), 0)
+
+    def test_below_resting_is_zone_0(self):
+        """HR below resting_hr (60) should return zone 0."""
+        self.assertEqual(self.controller.get_hr_zone(55), 0)
+
+    def test_resting_hr_is_zone_1(self):
+        """HR at resting_hr should return zone 1."""
+        self.assertEqual(self.controller.get_hr_zone(60), 1)
+
+    def test_zone_1(self):
+        """HR in zone 1 range should return 1."""
+        # 185 * 70 / 100 = 129.5 (float boundary), so 129 < 129.5 → zone 1
+        self.assertEqual(self.controller.get_hr_zone(100), 1)
+        self.assertEqual(self.controller.get_hr_zone(129), 1)
+
+    def test_zone_2(self):
+        """HR in zone 2 range should return 2."""
+        # z1_boundary = 129.5, z2_boundary = 148.0
+        # 130 >= 129.5 → zone 2; 147 < 148.0 → zone 2
+        self.assertEqual(self.controller.get_hr_zone(130), 2)
+        self.assertEqual(self.controller.get_hr_zone(140), 2)
+
+    def test_zone_3(self):
+        """HR at or above z2_boundary should return zone 3."""
+        # 185 * 80 / 100 = 148.0 (exact), so 148 >= 148.0 → zone 3
+        self.assertEqual(self.controller.get_hr_zone(148), 3)
+        self.assertEqual(self.controller.get_hr_zone(175), 3)
+
+    def test_hr_zones_property(self):
+        """hr_zones property should return correct boundaries."""
+        zones = self.controller.hr_zones
+        self.assertIn('resting_hr', zones)
+        self.assertIn('z1_max', zones)
+        self.assertIn('z2_max', zones)
+        self.assertEqual(zones['resting_hr'], 60)
+        self.assertEqual(zones['z1_max'], 129)  # int(185 * 70 / 100) = int(129.5) = 129
+        self.assertEqual(zones['z2_max'], 148)  # int(185 * 80 / 100) = int(148.0) = 148
+
+
+class TestHRZoneControl(unittest.TestCase):
+    """Test HR zone-based fan control."""
+
+    def _make_controller(self, zone_mode='power_only', hr_enabled=True):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['skip_connection'] = True
+        settings['minimum_samples'] = 1
+        settings['buffer_seconds'] = 1
+        settings['heart_rate_zones'] = {
+            'enabled': hr_enabled,
+            'max_hr': 185,
+            'resting_hr': 60,
+            'zone_mode': zone_mode,
+            'z1_max_percent': 70,
+            'z2_max_percent': 80
+        }
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings, f, indent=2)
+        f.close()
+        self._tmp = f.name
+        controller = PowerZoneController(f.name)
+        controller.ble.running = True
+        self.sent_commands = []
+        controller.ble.send_command_sync = lambda level: self.sent_commands.append(level)
+        return controller
+
+    def tearDown(self):
+        if hasattr(self, '_tmp') and os.path.exists(self._tmp):
+            os.unlink(self._tmp)
+
+    def test_power_only_mode_hr_ignored_for_fan(self):
+        """In power_only mode, HR data should not send BLE commands."""
+        controller = self._make_controller(zone_mode='power_only', hr_enabled=True)
+        # First set a power zone
+        controller.process_power_data(200)  # zone 3
+        self.sent_commands.clear()
+        # Now send high HR - should not affect fan in power_only mode
+        controller.process_heart_rate_data(175)  # zone 3 HR
+        self.assertEqual(len(self.sent_commands), 0)
+
+    def test_hr_only_mode_hr_drives_fan(self):
+        """In hr_only mode, HR data should drive the fan."""
+        controller = self._make_controller(zone_mode='hr_only')
+        # HR above z2_max → zone 3
+        controller.process_heart_rate_data(175)
+        self.assertIn(3, self.sent_commands)
+
+    def test_hr_only_mode_power_does_not_drive_fan(self):
+        """In hr_only mode, power data should not drive the fan."""
+        controller = self._make_controller(zone_mode='hr_only')
+        # High power but no HR yet - should not send command
+        controller.process_power_data(200)  # zone 3
+        self.assertEqual(len(self.sent_commands), 0)
+
+    def test_higher_wins_power_higher(self):
+        """In higher_wins mode, higher of power/HR zone wins."""
+        controller = self._make_controller(zone_mode='higher_wins')
+        # Set HR zone to 1 (low HR)
+        controller.current_hr_zone = 1
+        controller.process_power_data(200)  # power zone 3
+        self.assertIn(3, self.sent_commands)
+
+    def test_higher_wins_hr_higher(self):
+        """In higher_wins mode, HR zone wins when higher than power zone."""
+        controller = self._make_controller(zone_mode='higher_wins')
+        # Set power zone to 1 by processing low power
+        controller.process_power_data(50)  # zone 1
+        self.sent_commands.clear()
+        controller.current_power_zone = 1
+        # Now set HR to zone 3 (high HR)
+        controller.process_heart_rate_data(175)  # zone 3
+        self.assertIn(3, self.sent_commands)
+
+    def test_hr_disabled_hr_only_logged(self):
+        """When HR zones disabled, HR data should only be logged (no fan control)."""
+        controller = self._make_controller(hr_enabled=False)
+        controller.process_heart_rate_data(175)
+        # current_heart_rate should be updated
+        self.assertEqual(controller.current_heart_rate, 175)
+        # But no BLE command sent
+        self.assertEqual(len(self.sent_commands), 0)
+
+    def test_hr_buffer_smoothing(self):
+        """HR buffer should smooth out spikes."""
+        controller = self._make_controller(zone_mode='hr_only')
+        # Feed multiple HR values; average should determine zone
+        for hr in [170, 172, 174, 175]:
+            controller.process_heart_rate_data(hr)
+        # All values > z2_max (148), so should be in zone 3
+        self.assertEqual(controller.current_hr_zone, 3)
+
+
+class TestZwiftSourceHRParsing(unittest.TestCase):
+    """Test Zwift UDP packet heart rate parsing."""
+
+    def setUp(self):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        self.source = ZwiftSource(
+            settings['data_source']['zwift'],
+            callback=lambda x: None
+        )
+
+    def test_parse_heart_rate_empty(self):
+        """Empty data should return None."""
+        self.assertIsNone(self.source._parse_heart_rate(b''))
+
+    def test_parse_heart_rate_too_short(self):
+        """Too-short data should return None."""
+        self.assertIsNone(self.source._parse_heart_rate(b'\x00\x01'))
+
+    def test_hr_callback_called_when_set(self):
+        """hr_callback should be called with HR from packet when set."""
+        from zwift_simulator import create_zwift_udp_packet
+        received = []
+        source = ZwiftSource(
+            DEFAULT_SETTINGS['data_source']['zwift'],
+            callback=lambda x: None,
+            hr_callback=lambda hr: received.append(hr)
+        )
+        source._active = True
+        # Create packet with default heart_rate=140 (field 6 is included by simulator)
+        data = create_zwift_udp_packet(200)
+        # Manually invoke what _listen_loop would do
+        power = source._parse_power(data)
+        if source.hr_callback is not None and source.active:
+            hr = source._parse_heart_rate(data)
+            if hr is not None:
+                source.hr_callback(hr)
+        # Simulator encodes field 6 (heart_rate=140 by default)
+        self.assertEqual(received, [140])
+
+    def test_hr_callback_none_by_default(self):
+        """hr_callback should default to None."""
+        source = ZwiftSource(
+            DEFAULT_SETTINGS['data_source']['zwift'],
+            callback=lambda x: None
+        )
+        self.assertIsNone(source.hr_callback)
