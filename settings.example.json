@@ -1,0 +1,58 @@
+{
+  "ftp": 180,
+  "min_watt": 0,
+  "max_watt": 1000,
+  "cooldown_seconds": 120,
+  "buffer_seconds": 3,
+  "minimum_samples": 8,
+  "dropout_timeout": 5,
+  "zero_power_immediate": false,
+  "zone_thresholds": {
+    "z1_max_percent": 60,
+    "z2_max_percent": 89
+  },
+  "ble": {
+    "skip_connection": false,
+    "device_name": "FanController",
+    "scan_timeout": 10,
+    "connection_timeout": 15,
+    "reconnect_interval": 5,
+    "max_retries": 10,
+    "command_timeout": 3,
+    "service_uuid": "0000ffe0-0000-1000-8000-00805f9b34fb",
+    "characteristic_uuid": "0000ffe1-0000-1000-8000-00805f9b34fb",
+    "pin_code": null
+  },
+  "data_source": {
+    "primary": "antplus",
+    "fallback": "zwift",
+    "heart_rate_source": "antplus",
+    "zwift": {
+      "port": 3022,
+      "host": "127.0.0.1",
+      "process_name": "ZwiftApp.exe",
+      "check_interval": 5
+    }
+  },
+  "antplus_bridge": {
+    "enabled": false,
+    "heart_rate": {
+      "enabled": true,
+      "device_id": 0
+    },
+    "ble_broadcast": {
+      "enabled": true,
+      "power_service": true,
+      "heart_rate_service": true,
+      "device_name": "SmartFanBridge"
+    }
+  },
+  "heart_rate_zones": {
+    "enabled": false,
+    "max_hr": 185,
+    "resting_hr": 60,
+    "zone_mode": "power_only",
+    "z1_max_percent": 70,
+    "z2_max_percent": 80
+  }
+}

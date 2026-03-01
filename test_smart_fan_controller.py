@@ -1659,6 +1659,16 @@ class TestZwiftSourceHRParsing(unittest.TestCase):
         self.assertIsNone(source.hr_callback)
 
 
+class TestOnAntplusDataBridgeHeartRate(unittest.TestCase):
+    """Test that _on_antplus_data only forwards HR to bridge when heart_rate_source != 'zwift'."""
+
+    def _make_manager(self, heart_rate_source):
+        from smart_fan_controller import DataSourceManager
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['skip_connection'] = True
+        settings['data_source']['primary'] = 'zwift'
+        settings['data_source']['fallback'] = 'none'
+        settings['data_source']['heart_rate_source'] = heart_rate_source
 class TestHROnlyUpdatesLastDataTime(unittest.TestCase):
     """BUG #26: process_heart_rate_data should update last_data_time in hr_only mode."""
 
@@ -1808,6 +1818,10 @@ class TestCooldownElif(unittest.TestCase):
         f.close()
         self._tmp = f.name
         controller = PowerZoneController(f.name)
+        manager = DataSourceManager(settings, controller)
+        manager.bridge = MagicMock()
+        manager.controller = MagicMock()
+        return manager
         controller.ble.running = True
         controller.ble.send_command_sync = lambda level: None
         return controller
@@ -2001,6 +2015,25 @@ class TestSaveDefaultSettingsShowsPath(unittest.TestCase):
         if hasattr(self, '_tmp') and os.path.exists(self._tmp):
             os.unlink(self._tmp)
 
+    def test_bridge_not_updated_when_heart_rate_source_is_zwift(self):
+        """bridge.update_heart_rate should NOT be called when heart_rate_source='zwift'."""
+        manager = self._make_manager('zwift')
+        HeartRateData = smart_fan_controller.HeartRateData
+        hr_data = HeartRateData()
+        hr_data.heart_rate = 155
+        manager._on_antplus_data(0, '', hr_data)
+        manager.bridge.update_heart_rate.assert_not_called()
+        manager.controller.process_heart_rate_data.assert_not_called()
+
+    def test_bridge_updated_when_heart_rate_source_is_antplus(self):
+        """bridge.update_heart_rate should be called when heart_rate_source='antplus'."""
+        manager = self._make_manager('antplus')
+        HeartRateData = smart_fan_controller.HeartRateData
+        hr_data = HeartRateData()
+        hr_data.heart_rate = 155
+        manager._on_antplus_data(0, '', hr_data)
+        manager.bridge.update_heart_rate.assert_called_once_with(155)
+        manager.controller.process_heart_rate_data.assert_called_once_with(155)
     def test_success_prints_absolute_path(self):
         """On success, save_default_settings should print the absolute path."""
         controller = self._make_controller()

@@ -2082,10 +2082,10 @@ class DataSourceManager:
             self.bridge.update_power(power)
         elif isinstance(data, HeartRateData):
             hr = data.heart_rate
-            self.bridge.update_heart_rate(hr)
             if self.heart_rate_source != 'zwift':
                 self.antplus_last_hr = time.time()
                 self.controller.process_heart_rate_data(hr)
+                self.bridge.update_heart_rate(hr)
 
     def _register_antplus_device(self, device):
         """ANT+ eszköz regisztrálása – callback-ek beállítása.

@@ -1,7 +1,5 @@
 import socket
 import time
-import random
-import struct
 
 # Zwift UDP beállítások
 ZWIFT_HOST = "127.0.0.1"
