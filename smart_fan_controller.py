@@ -2,6 +2,7 @@ import sys
 import os
 import logging
 import json
+import math
 import time
 import asyncio
 import threading
@@ -154,6 +155,7 @@ class BLEController:
         self.retry_count = 0
         self.retry_reset_time = None
         self.last_sent_command = None
+        self._state_lock = threading.Lock()
 
         self.command_queue = queue.Queue(maxsize=1)
         self.running = False
@@ -247,6 +249,7 @@ class BLEController:
         figyelmeztető üzenetet ír ki, de a program folytatódik
         (a parancs küldéskor automatikusan újrapróbálkozik).
         """
+        success = await self._scan_and_connect_async()
         if not success:
             print(f"⚠ Nem sikerült csatlakozni a BLE eszközhöz, de folytatjuk...")
             print(f"  A program automatikusan újrapróbálkozik parancs küldéskor.")
@@ -1080,10 +1083,14 @@ class PowerZoneController:
             power: Az ellenőrizendő érték.
 
         Visszaad:
-            bool: True, ha szám, nem negatív, és nem haladja meg a max_watt-ot.
+            bool: True, ha szám, nem bool, nem NaN/Inf, nem negatív, és nem haladja meg a max_watt-ot.
         """
         try:
             if not isinstance(power, (int, float)):
+                return False
+            if isinstance(power, bool):
+                return False
+            if math.isnan(power) or math.isinf(power):
                 return False
             if power < 0:
                 return False
@@ -1265,11 +1272,11 @@ class PowerZoneController:
             power (int|float): Az azonnali teljesítmény wattban.
         """
         with self.state_lock:
-            self.last_data_time = time.time()
-
             if not self.is_valid_power(power):
                 print("⚠ FIGYELMEZTETÉS: Érvénytelen adat!")
                 return
+
+            self.last_data_time = time.time()
 
             power = int(power)
             self.power_buffer.append(power)
@@ -1327,7 +1334,7 @@ class PowerZoneController:
             hr = int(hr)
         except (TypeError, ValueError):
             return
-        if hr <= 0 or hr > 250:
+        if hr <= 0 or hr > 220:
             return
         self.current_heart_rate = hr
 
@@ -1415,6 +1422,8 @@ class ZwiftSource:
         """Thread-biztos olvasás: True, ha a forrás aktív (adatokat ad át a callback-nek)."""
         with self._active_lock:
             return self._active
+
+    def set_active(self, active):
         """Beállítja a forrás aktív/passzív állapotát thread-biztosan.
 
         Ha az állapot megváltozik, konzolra ír. Passzív állapotban az UDP
@@ -1911,7 +1920,9 @@ class BLEBridgeServer:
         """Leállítja a BLE Bridge háttérszálat."""
         self._running = False
         if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=3)
+            self._thread.join(timeout=5)
+            if self._thread.is_alive():
+                print("⚠ BLE Bridge thread nem állt le időben")
 
 
 # ============================================================
@@ -2136,6 +2147,8 @@ class DataSourceManager:
                 except Exception as re:
                     print(f"✗ ANT+ újrainicializálás hiba: {re}")
                     time.sleep(self.ANTPLUS_RECONNECT_DELAY)
+                    if not self.running:
+                        break
 
     def _stop_antplus_node(self):
         """Leállítja az ANT+ node-ot és felszabadítja az eszközöket."""
@@ -2240,8 +2253,7 @@ class DataSourceManager:
             print(f"📡 Másodlagos adatforrás: {self.fallback.upper()}")
 
         if self.primary == 'antplus' or self.fallback == 'antplus':
-            if self.primary == 'antplus':
-                self.antplus_startup_grace_end = time.time() + self.ANTPLUS_STARTUP_GRACE
+            self.antplus_startup_grace_end = time.time() + self.ANTPLUS_STARTUP_GRACE
             self._start_antplus()
 
         if self.zwift_source:
@@ -2266,6 +2278,9 @@ class DataSourceManager:
     def stop(self):
         """Leállítja az összes adatforrást és a BLE Bridge-et."""
         self.running = False
+
+        if self.monitor_thread and self.monitor_thread.is_alive():
+            self.monitor_thread.join(timeout=10)
 
         try:
             self._stop_antplus()
@@ -2301,69 +2316,65 @@ def main():
     """
     logging.disable(logging.CRITICAL)
 
-    devnull = open(os.devnull, 'w')
-    sys.stderr = devnull
+    logging.getLogger('bleak').setLevel(logging.CRITICAL)
+    logging.getLogger('openant').setLevel(logging.CRITICAL)
+
+    print("=" * 60)
+    print("  Smart Fan Controller - ANT+ Power Meter → BLE Fan Control")
+    print("=" * 60)
+    print()
+
+    controller = PowerZoneController("settings.json")
+
+    print()
+    print("-" * 60)
+
+    controller.ble.start()
+    controller.start_dropout_checker()
+
+    ble_timeout = (controller.settings['ble']['scan_timeout'] +
+                   controller.settings['ble']['connection_timeout'])
+
+    if not controller.settings['ble'].get('skip_connection', False):
+        print(f"⏳ BLE inicializálás folyamatban (max {ble_timeout}s)...")
+
+    controller.ble.ready_event.wait(timeout=ble_timeout)
+    print("✓ BLE inicializálás kész")
+
+    print("-" * 60)
+    print()
+
+    data_manager = DataSourceManager(controller.settings, controller)
+    data_manager.start()
+
+    print()
+    print("🚴 Figyelés elindítva... (Ctrl+C a leállításhoz)")
+    print()
 
     try:
-        print("=" * 60)
-        print("  Smart Fan Controller - ANT+ Power Meter → BLE Fan Control")
-        print("=" * 60)
-        print()
-
-        controller = PowerZoneController("settings.json")
-
-        print()
-        print("-" * 60)
-
-        controller.ble.start()
-        controller.start_dropout_checker()
-
-        ble_timeout = (controller.settings['ble']['scan_timeout'] +
-                       controller.settings['ble']['connection_timeout'])
-
-        if not controller.settings['ble'].get('skip_connection', False):
-            print(f"⏳ BLE inicializálás folyamatban (max {ble_timeout}s)...")
-
-        controller.ble.ready_event.wait(timeout=ble_timeout)
-        print("✓ BLE inicializálás kész")
-
-        print("-" * 60)
-        print()
-
-        data_manager = DataSourceManager(controller.settings, controller)
-        data_manager.start()
-
-        print()
-        print("🚴 Figyelés elindítva... (Ctrl+C a leállításhoz)")
-        print()
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\n\n🛑 Leállítás...")
+    finally:
+        try:
+            data_manager.stop()
+        except Exception as e:
+            print(f"DataSource leállítási hiba: {e}")
 
         try:
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            print("\n\n🛑 Leállítás...")
-        finally:
-            try:
-                data_manager.stop()
-            except Exception as e:
-                print(f"DataSource leállítási hiba: {e}")
+            controller.stop_dropout_checker()
+        except Exception as e:
+            print(f"Dropout thread leállítási hiba: {e}")
 
-            try:
-                controller.stop_dropout_checker()
-            except Exception as e:
-                print(f"Dropout thread leállítási hiba: {e}")
+        try:
+            controller.ble.stop()
+        except Exception as e:
+            print(f"BLE leállítási hiba: {e}")
 
-            try:
-                controller.ble.stop()
-            except Exception as e:
-                print(f"BLE leállítási hiba: {e}")
-
-            print()
-            print("✓ Program leállítva")
-            print()
-    finally:
-        sys.stderr = sys.__stderr__
-        devnull.close()
+        print()
+        print("✓ Program leállítva")
+        print()
 
 
 if __name__ == "__main__":
