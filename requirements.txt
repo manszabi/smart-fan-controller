@@ -16,10 +16,6 @@ bleak>=0.21.0
 # A Zwift UDP csomagok protobuf formátumban érkeznek
 protobuf>=4.25.0
 
-# Protobuf kód generálás - zwift.proto → zwift_pb2.py
-# Csak a fejlesztéshez/generáláshoz kell, futtatáshoz nem
-grpcio-tools>=1.60.0
-
 # --- Opcionális függőségek ---
 
 # BLE periféria/szerver - ANT+ → BLE bridge funkcióhoz
