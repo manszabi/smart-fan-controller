@@ -1,0 +1,290 @@
+{
+  // ============================================================
+  // Smart Fan Controller – Beállítások példafájl (settings.example.jsonc)
+  // ============================================================
+  // Ez a fájl bemutatja az összes lehetséges beállítást magyarázatokkal.
+  // A tényleges konfigurációs fájl neve: settings.json (JSONC kommentek nélkül!).
+  // Ha a settings.json nem létezik, a program automatikusan létrehozza
+  // az alapértelmezett értékekkel.
+  //
+  // Szerkesztési tippek:
+  //  – Másold le ezt a fájlt settings.json névre, és töröld ki a kommenteket.
+  //  – Csak azokat a mezőket kell megadni, amelyeket módosítani szeretnél;
+  //    a többi beállítás az alapértelmezett értéket veszi fel.
+  // ============================================================
+
+  // ---- Alapbeállítások ----------------------------------------
+
+  // Az FTP (Functional Threshold Power) értéked wattban.
+  // A zóna határok ennek százalékában kerülnek kiszámításra.
+  // Érvényes tartomány: 100–500
+  // Alapértelmezett: 180
+  "ftp": 180,
+
+  // Minimális figyelembe vett teljesítmény wattban.
+  // Ennél kisebb értéket a rendszer érvénytelennek tekint.
+  // Érvényes tartomány: 0 vagy nagyobb
+  // Alapértelmezett: 0
+  "min_watt": 0,
+
+  // Maximális figyelembe vett teljesítmény wattban.
+  // Ennél nagyobb értéket a rendszer érvénytelennek tekint, és figyelmen kívül hagyja.
+  // Érvényes tartomány: min_watt-nál nagyobb
+  // Alapértelmezett: 1000
+  "max_watt": 1000,
+
+  // Cooldown idő másodpercben: zóna csökkentés előtt ennyi ideig vár a rendszer.
+  // Ez megakadályozza, hogy rövid teljesítmény-visszaesésnél azonnal visszaváltson
+  // egy alacsonyabb zónára (pl. hegyi szakasz utáni rövid pihenőnél).
+  // Érvényes tartomány: 0–300
+  // Alapértelmezett: 120
+  "cooldown_seconds": 120,
+
+  // Az átlagolási ablak mérete másodpercben.
+  // A rendszer az elmúlt ennyi másodpercnyi adatból számít átlagot a zónadöntéshez.
+  // Kisebb érték → gyorsabb reakció, de több zóna-ugrás.
+  // Nagyobb érték → simább működés, de lassabb reakció.
+  // Érvényes tartomány: 1–10
+  // Alapértelmezett: 3
+  "buffer_seconds": 3,
+
+  // Minimum minták száma az átlagolási pufferben, mielőtt a rendszer zónát dönt.
+  // A program indulás után addig vár a döntéssel, amíg legalább ennyi minta összegyűlt.
+  // Nem lehet nagyobb, mint buffer_seconds × 4.
+  // Érvényes tartomány: 1 vagy nagyobb
+  // Alapértelmezett: 8
+  "minimum_samples": 8,
+
+  // Dropout timeout másodpercben: ennyi ideig nem érkező adat esetén
+  // a ventilátor azonnal 0-s szintre (ki) kapcsol.
+  // Megakadályozza, hogy az adatforrás elvesztésekor a ventilátor
+  // az utolsó zónán maradjon.
+  // Érvényes tartomány: 0-nál nagyobb
+  // Alapértelmezett: 5
+  "dropout_timeout": 5,
+
+  // Ha true: 0 watt detektálásakor a ventilátor azonnal leáll (cooldown nélkül).
+  // Ha false: 0 watt esetén is lefut a cooldown_seconds várakozás.
+  // Érvényes értékek: true, false
+  // Alapértelmezett: false
+  "zero_power_immediate": false,
+
+  // ---- Teljesítmény zóna határok ------------------------------
+  "zone_thresholds": {
+    // Z1 zóna felső határa az FTP százalékában.
+    // Zóna 1: 1W – (ftp × z1_max_percent / 100) W  → alacsony teljesítmény
+    // Pl. FTP=180, z1_max_percent=60 → Z1 max = 108W
+    // Érvényes tartomány: 1–100, és kisebb kell legyen, mint z2_max_percent
+    // Alapértelmezett: 60
+    "z1_max_percent": 60,
+
+    // Z2 zóna felső határa az FTP százalékában.
+    // Zóna 2: (z1_max+1)W – (ftp × z2_max_percent / 100) W  → közepes teljesítmény
+    // Zóna 3: (z2_max+1)W – max_watt              → magas teljesítmény
+    // Pl. FTP=180, z2_max_percent=89 → Z2 max = 160W
+    // Érvényes tartomány: 1–100, és nagyobb kell legyen, mint z1_max_percent
+    // Alapértelmezett: 89
+    "z2_max_percent": 89
+  },
+
+  // ---- BLE (Bluetooth Low Energy) beállítások ----------------
+  "ble": {
+    // Ha true: TEST MODE – a BLE kapcsolat kimarad, a parancsok csak a konzolon
+    // jelennek meg. Fejlesztéshez és teszteléshez hasznos ESP32 hardver nélkül.
+    // Ha false: valós BLE kapcsolatot próbál létesíteni.
+    // Érvényes értékek: true, false
+    // Alapértelmezett: false
+    "skip_connection": false,
+
+    // A BLE eszköz neve, amelyhez csatlakozni kell (pontosan így kell megadni,
+    // ahogy az ESP32 hirdeti magát).
+    // Típus: szöveg
+    // Alapértelmezett: "FanController"
+    "device_name": "FanController",
+
+    // BLE szkennelési időkorlát másodpercben: ennyi ideig keres BLE eszközöket.
+    // Érvényes tartomány: 1–60
+    // Alapértelmezett: 10
+    "scan_timeout": 10,
+
+    // BLE csatlakozási időkorlát másodpercben: ennyi ideig próbál csatlakozni.
+    // Érvényes tartomány: 1–60
+    // Alapértelmezett: 15
+    "connection_timeout": 15,
+
+    // Újracsatlakozási próbálkozások közötti várakozási idő másodpercben.
+    // Érvényes tartomány: 1–60
+    // Alapértelmezett: 5
+    "reconnect_interval": 5,
+
+    // Maximális újracsatlakozási kísérletek száma. Ha ezt eléri, 30 másodpercet
+    // vár, majd újraindul a számlálás.
+    // Érvényes tartomány: 1–100
+    // Alapértelmezett: 10
+    "max_retries": 10,
+
+    // BLE parancs küldési időkorlát másodpercben.
+    // Érvényes tartomány: 1–30
+    // Alapértelmezett: 3
+    "command_timeout": 3,
+
+    // BLE GATT szerviz UUID. Az ESP32 firmware-rel kell egyeznie.
+    // Típus: szöveg (UUID formátum)
+    // Alapértelmezett: "0000ffe0-0000-1000-8000-00805f9b34fb"
+    "service_uuid": "0000ffe0-0000-1000-8000-00805f9b34fb",
+
+    // BLE GATT karakterisztika UUID, amelyre a LEVEL:n parancsok íródnak.
+    // Az ESP32 firmware-rel kell egyeznie.
+    // Típus: szöveg (UUID formátum)
+    // Alapértelmezett: "0000ffe1-0000-1000-8000-00805f9b34fb"
+    "characteristic_uuid": "0000ffe1-0000-1000-8000-00805f9b34fb",
+
+    // BLE PIN kód párosításhoz. Ha null, nem történik PIN-alapú párosítás.
+    // Csak akkor szükséges, ha az ESP32 firmware PIN kódot igényel.
+    // Érvényes értékek: null, vagy 0–999999 közötti egész szám
+    // Alapértelmezett: null
+    "pin_code": null
+  },
+
+  // ---- Adatforrás beállítások ---------------------------------
+  "data_source": {
+    // Elsődleges adatforrás.
+    // "antplus": ANT+ power meter (USB ANT+ dongle szükséges)
+    // "zwift":   Zwift szimulátorból vett adat (UDP csomag)
+    // Érvényes értékek: "antplus", "zwift"
+    // Alapértelmezett: "antplus"
+    "primary": "antplus",
+
+    // Fallback (tartalék) adatforrás, amelyre az elsődleges kiesése esetén vált.
+    // "zwift": Zwift UDP adatforrás
+    // "none":  Nincs fallback, kiesés esetén dropout kezeli a helyzetet
+    // Az elsődlegessel azonos nem lehet.
+    // Érvényes értékek: "zwift", "none"
+    // Alapértelmezett: "zwift"
+    "fallback": "zwift",
+
+    // A szívfrekvencia (HR) adatforrása.
+    // "antplus": ANT+ HR monitor adatait használja
+    // "zwift":   Zwift UDP csomagból olvassa a HR-t
+    // "both":    Mindkettőt figyeli; ha az ANT+ aktív, azt preferálja
+    // Érvényes értékek: "antplus", "zwift", "both"
+    // Alapértelmezett: "antplus"
+    "heart_rate_source": "antplus",
+
+    // Zwift UDP kapcsolat beállításai
+    "zwift": {
+      // UDP port, amelyen a Zwift adatokat sugározza.
+      // Érvényes tartomány: 1–65535
+      // Alapértelmezett: 3022
+      "port": 3022,
+
+      // A Zwift UDP adatainak fogadási hálózati cím.
+      // Általában "127.0.0.1" (localhost), ha ugyanazon a gépen fut.
+      // Típus: szöveg (IP cím)
+      // Alapértelmezett: "127.0.0.1"
+      "host": "127.0.0.1",
+
+      // A Zwift futási folyamatának neve. A program ezzel ellenőrzi,
+      // hogy a Zwift valóban fut-e (psutil segítségével).
+      // Típus: szöveg
+      // Alapértelmezett: "ZwiftApp.exe"
+      "process_name": "ZwiftApp.exe",
+
+      // Milyen gyakran ellenőrzi (másodpercenként), hogy a Zwift fut-e.
+      // Érvényes tartomány: 1–60
+      // Alapértelmezett: 5
+      "check_interval": 5
+    }
+  },
+
+  // ---- ANT+ Bridge beállítások --------------------------------
+  "antplus_bridge": {
+    // Ha true: az ANT+ adatokat BLE GATT szolgáltatásként is sugározza,
+    // hogy más BLE-kompatibilis eszközök (pl. okosóra, telefon) is lássák.
+    // Ha false: a bridge funkció ki van kapcsolva.
+    // Érvényes értékek: true, false
+    // Alapértelmezett: false
+    "enabled": false,
+
+    // ANT+ szívfrekvencia monitor beállítások
+    "heart_rate": {
+      // Ha true: ANT+ HR monitort is figyel (a power meter mellett).
+      // Érvényes értékek: true, false
+      // Alapértelmezett: true
+      "enabled": true,
+
+      // ANT+ HR eszköz azonosítója. 0 = bármely HR monitor.
+      // Érvényes tartomány: 0–65535
+      // Alapértelmezett: 0
+      "device_id": 0
+    },
+
+    // BLE broadcast (sugárzás) beállítások
+    "ble_broadcast": {
+      // Ha true: a BLE GATT sugárzás aktív.
+      // Érvényes értékek: true, false
+      // Alapértelmezett: true
+      "enabled": true,
+
+      // Ha true: kerékpáros teljesítmény GATT szolgáltatást sugároz
+      // (Cycling Power Service, UUID: 0x1818).
+      // Érvényes értékek: true, false
+      // Alapértelmezett: true
+      "power_service": true,
+
+      // Ha true: szívfrekvencia GATT szolgáltatást sugároz
+      // (Heart Rate Service, UUID: 0x180D).
+      // Érvényes értékek: true, false
+      // Alapértelmezett: true
+      "heart_rate_service": true,
+
+      // A BLE bridge eszköz neve, ahogy más eszközök látják.
+      // Típus: szöveg
+      // Alapértelmezett: "SmartFanBridge"
+      "device_name": "SmartFanBridge"
+    }
+  },
+
+  // ---- Szívfrekvencia zóna beállítások ------------------------
+  "heart_rate_zones": {
+    // Ha true: a HR zóna rendszer aktív, és befolyásolja a ventilátor vezérlést.
+    // Ha false: a HR adat csak megjelenik a konzolon, de nem hat a zónára.
+    // Érvényes értékek: true, false
+    // Alapértelmezett: false
+    "enabled": false,
+
+    // Maximális szívfrekvencia (bpm). A HR zóna határok ennek százalékában
+    // kerülnek kiszámításra.
+    // Érvényes tartomány: 100–220 (egész szám)
+    // Alapértelmezett: 185
+    "max_hr": 185,
+
+    // Pihenő szívfrekvencia (bpm). Ez alatt a rendszer 0-s HR zónát (pihenő) jelez.
+    // Érvényes tartomány: 30–100 (egész szám), és kisebb kell legyen z1_max-nál
+    // Alapértelmezett: 60
+    "resting_hr": 60,
+
+    // A zóna döntési mód, ha a HR zóna aktív (enabled: true):
+    // "power_only":  A ventilátor csak a teljesítmény zóna alapján dönt (HR figyelmen kívül).
+    // "hr_only":     A ventilátor csak a HR zóna alapján dönt (teljesítmény figyelmen kívül).
+    // "higher_wins": A teljesítmény és HR zóna közül a magasabb értékű dönt.
+    // Érvényes értékek: "power_only", "hr_only", "higher_wins"
+    // Alapértelmezett: "power_only"
+    "zone_mode": "power_only",
+
+    // HR Z1 zóna felső határa a max_hr százalékában.
+    // HR zóna 1: resting_hr – (max_hr × z1_max_percent / 100) bpm
+    // Pl. max_hr=185, z1_max_percent=70 → Z1 max = 129 bpm
+    // Érvényes tartomány: 1–100 (egész szám), kisebb kell legyen mint z2_max_percent
+    // Alapértelmezett: 70
+    "z1_max_percent": 70,
+
+    // HR Z2 zóna felső határa a max_hr százalékában.
+    // HR zóna 2: z1_max – (max_hr × z2_max_percent / 100) bpm
+    // HR zóna 3: z2_max bpm felett
+    // Pl. max_hr=185, z2_max_percent=80 → Z2 max = 148 bpm
+    // Érvényes tartomány: 1–100 (egész szám), nagyobb kell legyen mint z1_max_percent
+    // Alapértelmezett: 80
+    "z2_max_percent": 80
+  }
+}

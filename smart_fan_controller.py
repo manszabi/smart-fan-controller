@@ -45,61 +45,67 @@ except ImportError:
 # Alapértelmezett beállítások
 # ============================================================
 DEFAULT_SETTINGS = {
-    "ftp": 180,
-    "min_watt": 0,
-    "max_watt": 1000,
-    "cooldown_seconds": 120,
-    "buffer_seconds": 3,
-    "minimum_samples": 8,
-    "dropout_timeout": 5,
-    "zero_power_immediate": False,
+    "ftp": 180,                    # Funkcionális küszöbteljesítmény wattban (100–500)
+    "min_watt": 0,                 # Minimális érvényes teljesítmény (0 vagy több)
+    "max_watt": 1000,              # Maximális érvényes teljesítmény (min_watt-nál több)
+    "cooldown_seconds": 120,       # Zóna csökkentés előtti várakozási idő másodpercben (0–300)
+    "buffer_seconds": 3,           # Átlagolási ablak mérete másodpercben (1–10)
+    "minimum_samples": 8,          # Zónadöntéshez szükséges minimális minták száma
+    "dropout_timeout": 5,          # Adat nélküli idő (s), ami után 0-s zónára vált
+    "zero_power_immediate": False, # True: 0W esetén azonnali leállás cooldown nélkül
     "zone_thresholds": {
-        "z1_max_percent": 60,
-        "z2_max_percent": 89
+        # Zóna határok az FTP százalékában:
+        # Z0: 0W (leállás), Z1: 1W–z1_max, Z2: z1_max+1–z2_max, Z3: z2_max+1–max_watt
+        "z1_max_percent": 60,      # Z1 felső határ: FTP×60% (pl. 180W → 108W)
+        "z2_max_percent": 89       # Z2 felső határ: FTP×89% (pl. 180W → 160W)
     },
     "ble": {
-        "skip_connection": False,
-        "device_name": "FanController",
-        "scan_timeout": 10,
-        "connection_timeout": 15,
-        "reconnect_interval": 5,
-        "max_retries": 10,
-        "command_timeout": 3,
-        "service_uuid": "0000ffe0-0000-1000-8000-00805f9b34fb",
-        "characteristic_uuid": "0000ffe1-0000-1000-8000-00805f9b34fb",
-        "pin_code": None
+        "skip_connection": False,  # True: TEST MODE, csak logolás, nincs BLE kapcsolat
+        "device_name": "FanController",  # BLE eszköz neve (pontosan egyezzen az ESP32-vel)
+        "scan_timeout": 10,        # BLE keresési időkorlát másodpercben (1–60)
+        "connection_timeout": 15,  # BLE csatlakozási időkorlát másodpercben (1–60)
+        "reconnect_interval": 5,   # Újracsatlakozási próbák közötti várakozás (s, 1–60)
+        "max_retries": 10,         # Maximális újracsatlakozási kísérletek száma (1–100)
+        "command_timeout": 3,      # BLE parancs küldési időkorlát másodpercben (1–30)
+        "service_uuid": "0000ffe0-0000-1000-8000-00805f9b34fb",         # GATT szerviz UUID
+        "characteristic_uuid": "0000ffe1-0000-1000-8000-00805f9b34fb", # GATT karakterisztika UUID
+        "pin_code": None           # BLE PIN kód párosításhoz (null = nincs PIN, 0–999999)
     },
     "data_source": {
-        "primary": "antplus",
-        "fallback": "zwift",
-        "heart_rate_source": "antplus",
+        "primary": "antplus",      # Elsődleges adatforrás: "antplus" vagy "zwift"
+        "fallback": "zwift",       # Tartalék adatforrás: "zwift" vagy "none"
+        "heart_rate_source": "antplus",  # HR forrás: "antplus", "zwift" vagy "both"
         "zwift": {
-            "port": 3022,
-            "host": "127.0.0.1",
-            "process_name": "ZwiftApp.exe",
-            "check_interval": 5
+            "port": 3022,          # Zwift UDP port (1–65535)
+            "host": "127.0.0.1",   # UDP fogadási cím (általában localhost)
+            "process_name": "ZwiftApp.exe",  # Zwift futási folyamat neve (psutil)
+            "check_interval": 5    # Zwift futás ellenőrzési időköz másodpercben (1–60)
         }
     },
     "antplus_bridge": {
-        "enabled": False,
+        "enabled": False,          # True: ANT+ adatok BLE-re való továbbítása aktív
         "heart_rate": {
-            "enabled": True,
-            "device_id": 0
+            "enabled": True,       # True: ANT+ HR monitor figyelése
+            "device_id": 0         # ANT+ HR eszközazonosító (0 = bármely)
         },
         "ble_broadcast": {
-            "enabled": True,
-            "power_service": True,
-            "heart_rate_service": True,
-            "device_name": "SmartFanBridge"
+            "enabled": True,       # True: BLE GATT sugárzás aktív
+            "power_service": True, # True: Cycling Power Service (UUID: 0x1818) sugárzása
+            "heart_rate_service": True,  # True: Heart Rate Service (UUID: 0x180D) sugárzása
+            "device_name": "SmartFanBridge"  # BLE bridge eszköz neve
         }
     },
     "heart_rate_zones": {
-        "enabled": False,
-        "max_hr": 185,
-        "resting_hr": 60,
+        "enabled": False,          # True: HR zóna rendszer aktív (befolyásolja a ventilátort)
+        "max_hr": 185,             # Maximális szívfrekvencia bpm-ben (100–220)
+        "resting_hr": 60,          # Pihenő szívfrekvencia bpm-ben (30–100); ez alatt → Z0
+        # zone_mode: a HR és teljesítmény zóna összevonási módja:
+        #   "power_only"  – csak a teljesítmény zóna dönt (HR figyelmen kívül)
+        #   "hr_only"     – csak a HR zóna dönt (teljesítmény figyelmen kívül)
+        #   "higher_wins" – a kettő közül a magasabb értékű zóna dönt
         "zone_mode": "power_only",
-        "z1_max_percent": 70,
-        "z2_max_percent": 80
+        "z1_max_percent": 70,      # HR Z1 felső határ: max_hr×70% (pl. 185 → 129 bpm)
+        "z2_max_percent": 80       # HR Z2 felső határ: max_hr×80% (pl. 185 → 148 bpm)
     }
 }
 
@@ -108,7 +114,28 @@ DEFAULT_SETTINGS = {
 # BLEController
 # ============================================================
 class BLEController:
+    """BLE (Bluetooth Low Energy) kapcsolat kezelője az ESP32 ventilátor vezérlőhöz.
+
+    Egy dedikált háttérszálban futó asyncio event loop segítségével kezeli
+    a BLE kapcsolatot, parancsok sorba állítását és küldését.
+    Támogatja a TEST MODE-ot (skip_connection=True), amelyben tényleges
+    BLE kapcsolat nélkül csak a konzolra ír.
+
+    Attribútumok:
+        skip_connection (bool): Ha True, TEST MODE – nem csatlakozik, csak logol.
+        device_name (str): A keresett BLE eszköz neve.
+        command_queue (queue.Queue): A BLE parancsok várakozási sora (max 1 elem).
+        running (bool): True, ha a háttérszál fut.
+        is_connected (bool): True, ha a BLE kapcsolat aktív.
+    """
+
     def __init__(self, settings):
+        """Inicializálja a BLEController-t a megadott beállításokkal.
+
+        Paraméterek:
+            settings (dict): A teljes beállítások dict, amelyből a 'ble' kulcs
+                             alatt lévő értékeket olvassa ki.
+        """
         self.skip_connection = settings['ble'].get('skip_connection', False)
         
         self.device_name = settings['ble']['device_name']
@@ -135,6 +162,12 @@ class BLEController:
         self.ready_event = threading.Event()
 
     def start(self):
+        """Elindítja a BLE háttérszálat.
+
+        Létrehoz egy daemon szálat, amely a _ble_loop metódust futtatja.
+        Ha a szál már fut, figyelmeztetést ír ki és visszatér.
+        TEST MODE esetén a skip_connection=True beállítást jelzi.
+        """
         if self.running:
             print("⚠ BLE thread már fut!")
             return
@@ -148,6 +181,13 @@ class BLEController:
         print("✓ BLE thread elindítva")
 
     def _ble_loop(self):
+        """A BLE háttérszál fő ciklusa.
+
+        Egy új asyncio event loop-ot hoz létre, elvégzi az inicializálást
+        (vagy kihagyja TEST MODE esetén), majd várakozik a command_queue-ból
+        érkező parancsokra, és elküldi azokat a BLE eszköznek.
+        A szál leállításakor bontja a kapcsolatot és lezárja az event loop-ot.
+        """
         try:
             self.loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self.loop)
@@ -188,20 +228,38 @@ class BLEController:
             print("✓ BLE thread leállt")
 
     def _log_command(self, level):
-        """TEST MODE: csak kiírja a parancsot, nem küldi el"""
+        """TEST MODE: a parancsot csak a konzolra írja, nem küldi el BLE-n.
+
+        Csak akkor ír ki, ha az új szint eltér az utolsó küldött szinttől.
+
+        Paraméterek:
+            level (int): A ventilátor zóna szintje (0–3).
+        """
         if self.last_sent_command != level:
             message = f"LEVEL:{level}"
             print(f"🧪 TEST MODE - Parancs: {message}")
             self.last_sent_command = level
 
     async def _initial_connect(self):
-        success = await self._scan_and_connect_async()
+        """Kezdeti BLE kapcsolat felépítése indításkor.
+
+        Megpróbál csatlakozni a BLE eszközhöz. Ha nem sikerül,
+        figyelmeztető üzenetet ír ki, de a program folytatódik
+        (a parancs küldéskor automatikusan újrapróbálkozik).
+        """
         if not success:
             print(f"⚠ Nem sikerült csatlakozni a BLE eszközhöz, de folytatjuk...")
             print(f"  A program automatikusan újrapróbálkozik parancs küldéskor.")
 
     async def _scan_and_connect_async(self):
-        print(f"🔍 BLE eszköz keresése: {self.device_name}...")
+        """BLE eszköz keresése és csatlakozás.
+
+        A scan_timeout másodpercig keres BLE eszközöket, majd megkeresi
+        a device_name nevűt és megpróbál csatlakozni.
+
+        Visszaad:
+            bool: True, ha a csatlakozás sikeres; False egyébként.
+        """
         try:
             devices = await BleakScanner.discover(timeout=self.scan_timeout)
             for device in devices:
@@ -216,6 +274,14 @@ class BLEController:
             return False
 
     async def _connect_async(self):
+        """Csatlakozás a korábban megtalált BLE eszközhöz.
+
+        Ha már van aktív kapcsolat, nem próbál újra csatlakozni.
+        Ha pin_code be van állítva, párosítást is megkísérel.
+
+        Visszaad:
+            bool: True, ha a csatlakozás sikeres; False egyébként.
+        """
         if not self.device_address:
             return False
         try:
@@ -242,6 +308,11 @@ class BLEController:
             return False
 
     async def _is_connected_async(self):
+        """Ellenőrzi, hogy a BLE kapcsolat aktív-e.
+
+        Visszaad:
+            bool: True, ha a kliens csatlakoztatva van; False egyébként.
+        """
         try:
             if self.client:
                 return self.client.is_connected
@@ -250,6 +321,7 @@ class BLEController:
         return False
 
     async def _disconnect_async(self):
+        """Bontja a BLE kapcsolatot és felszabadítja a klienst."""
         if self.client:
             try:
                 await self.client.disconnect()
@@ -261,6 +333,18 @@ class BLEController:
                 self.client = None
 
     async def _send_command_async(self, level):
+        """Parancs aszinkron elküldése BLE-n, szükség esetén újracsatlakozással.
+
+        Ha nincs kapcsolat, megpróbál újracsatlakozni (max max_retries kísérlet).
+        Ha elérte a max kísérletszámot, 30 másodpercet vár, majd újraindul.
+        Azonos level esetén (és van aktív kapcsolat) nem küld ismét.
+
+        Paraméterek:
+            level (int): A ventilátor zóna szintje (0–3).
+
+        Visszaad:
+            bool: True, ha a parancs elküldése sikeres; False egyébként.
+        """
         if self.last_sent_command == level and await self._is_connected_async():
             return True
 
@@ -298,6 +382,17 @@ class BLEController:
         return await self._send_immediate(level)
 
     async def _send_immediate(self, level):
+        """Azonnal elküldi a parancsot a BLE GATT karakterisztikára.
+
+        A parancs formátuma: "LEVEL:<n>" (pl. "LEVEL:2").
+        Timeout esetén leállítja a kapcsolatot.
+
+        Paraméterek:
+            level (int): A ventilátor zóna szintje (0–3).
+
+        Visszaad:
+            bool: True, ha a küldés sikeres; False egyébként.
+        """
         if not await self._is_connected_async():
             self.is_connected = False
             return False
@@ -323,6 +418,16 @@ class BLEController:
             return False
 
     def send_command_sync(self, level):
+        """Ventilátor szint parancs szinkron küldése a BLE szálnak.
+
+        A parancsot a command_queue-ba teszi, amelyből a BLE háttérszál
+        veszi ki és küldi el. A sor mérete 1; ha teli van, a régi parancsot
+        elveti és az újat teszi be.
+
+        Paraméterek:
+            level (int): A ventilátor zóna szintje (0–3). Más érték esetén
+                         figyelmeztetést ír ki és visszatér.
+        """
         if isinstance(level, bool) or not isinstance(level, int) or level < 0 or level > 3:
             print(f"⚠ Érvénytelen parancs szint: {level} (egész számnak kell lennie, 0-3 között)")
             return
@@ -342,9 +447,11 @@ class BLEController:
                 print(f"⚠ Queue hiba, parancs elvetve: LEVEL:{level}")
 
     def stop(self):
-        if not self.running:
-            return
-        print("🛑 BLE thread leállítása...")
+        """Leállítja a BLE háttérszálat.
+
+        Jelzi a szálnak a leállást (running=False), majd megvárja
+        legfeljebb 5 másodpercig a szál befejezését.
+        """
         self.running = False
         if self.thread and self.thread.is_alive():
             self.thread.join(timeout=5)
@@ -358,7 +465,50 @@ class BLEController:
 # PowerZoneController
 # ============================================================
 class PowerZoneController:
+    """A fő vezérlő logika: teljesítmény zónák kiszámítása, cooldown és dropout kezelés.
+
+    A beállítások alapján (settings.json) kiszámítja a teljesítmény zóna határokat
+    (Z0–Z3), és az érkező power/HR adatok alapján dönt a ventilátor szintjéről.
+
+    Zóna rendszer:
+        Z0: 0W (leállás vagy dropout)
+        Z1: alacsony teljesítmény  (1W – FTP×z1_max_percent%)
+        Z2: közepes teljesítmény   (Z1_max+1W – FTP×z2_max_percent%)
+        Z3: magas teljesítmény     (Z2_max+1W – max_watt)
+
+    Cooldown mechanizmus:
+        Zóna csökkentésekor a rendszer nem vált azonnal, hanem cooldown_seconds
+        másodpercig vár. Ez megakadályozza a rövid teljesítmény-visszaesések
+        miatti felesleges zóna-váltásokat (pl. hegyi szakasz utáni pihenő).
+        Zóna növelésekor nincs cooldown – azonnal reagál.
+
+    Buffer/átlagolás:
+        Az adatokat egy deque pufferbe gyűjti (buffer_seconds × 4 mintahely).
+        A zónadöntés az átlagos teljesítmény alapján történik, nem az azonnali
+        értékek alapján. Legalább minimum_samples minta kell a döntéshez.
+
+    Dropout detektálás:
+        Ha dropout_timeout másodpercig nem érkezik adat, a ventilátor azonnal
+        Z0-ra (ki) kapcsol, megelőzve, hogy az utolsó zónán maradjon.
+
+    Attribútumok:
+        ftp (int): Funkcionális küszöbteljesítmény wattban.
+        zones (dict): A kiszámított zóna határok {0: (min, max), ...} formátumban.
+        current_zone (int|None): Aktuálisan aktív zóna (None = még nincs döntés).
+        cooldown_active (bool): True, ha a cooldown timer fut.
+        ble (BLEController): A BLE kommunikációs réteg.
+    """
+
     def __init__(self, settings_file="settings.json"):
+        """Inicializálja a PowerZoneController-t.
+
+        Betölti és validálja a beállításokat, kiszámítja a zóna határokat,
+        inicializálja a puffereket, és létrehozza a BLEController példányt.
+
+        Paraméterek:
+            settings_file (str): A JSON beállítások fájl elérési útja.
+                                 Alapértelmezett: "settings.json"
+        """
         self.settings = self.load_and_validate_settings(settings_file)
 
         self.ftp = self.settings['ftp']
@@ -421,6 +571,11 @@ class PowerZoneController:
             print(f"HR zóna határok: Z0 < {self.hr_zone_settings['resting_hr']} bpm, Z1 < {hr_z['z1_max']} bpm, Z2 < {hr_z['z2_max']} bpm")
 
     def start_dropout_checker(self):
+        """Elindítja a dropout ellenőrző háttérszálat.
+
+        Másodpercenként meghívja a check_dropout metódust, hogy detektálja
+        az adatforrás kiesését és szükség esetén Z0-ra kapcsoljon.
+        """
         self.running = True
         self.dropout_thread = threading.Thread(
             target=self._dropout_check_loop,
@@ -431,17 +586,34 @@ class PowerZoneController:
         print("✓ Dropout ellenőrző thread elindítva")
 
     def _dropout_check_loop(self):
+        """A dropout ellenőrző szál ciklusa – másodpercenként fut."""
         while self.running:
             self.check_dropout()
             time.sleep(1)
 
     def stop_dropout_checker(self):
+        """Leállítja a dropout ellenőrző háttérszálat."""
         self.running = False
         if self.dropout_thread and self.dropout_thread.is_alive():
             self.dropout_thread.join(timeout=3)
             print("✓ Dropout ellenőrző thread leállítva")
 
     def load_and_validate_settings(self, settings_file):
+        """Betölti és validálja a JSON beállítási fájlt.
+
+        Az alapértelmezett értékekből (DEFAULT_SETTINGS) indul ki, majd
+        felülírja az érvényes, fájlból betöltött értékekkel. Minden mezőre
+        ellenőrzi a típust és az érvényes tartományt. Hibás érték esetén
+        figyelmeztetést ír ki és az alapértelmezett értéket tartja meg.
+
+        Ha a fájl nem létezik, automatikusan létrehozza az alapértelmezettekkel.
+
+        Paraméterek:
+            settings_file (str): A JSON beállítások fájl elérési útja.
+
+        Visszaad:
+            dict: A validált beállítások dict-je.
+        """
         settings = copy.deepcopy(DEFAULT_SETTINGS)
 
         try:
@@ -812,6 +984,11 @@ class PowerZoneController:
         return settings
 
     def save_default_settings(self, settings_file):
+        """Létrehozza a settings.json fájlt az alapértelmezett beállításokkal.
+
+        Paraméterek:
+            settings_file (str): A létrehozandó fájl elérési útja.
+        """
         try:
             with open(settings_file, 'w', encoding='utf-8') as f:
                 json.dump(DEFAULT_SETTINGS, f, indent=2, ensure_ascii=False)
@@ -820,6 +997,18 @@ class PowerZoneController:
             print(f"✗ Nem sikerült létrehozni a '{settings_file}' fájlt: {e}")
 
     def calculate_zones(self):
+        """Kiszámítja a teljesítmény zóna határokat az FTP és a százalékos küszöbök alapján.
+
+        A határokat az FTP százalékában számítja:
+            Z1 max = FTP × z1_max_percent / 100
+            Z2 max = FTP × z2_max_percent / 100  (max_watt-nál nem lehet több)
+
+        Ha a kiszámított értékek meghaladják a max_watt-ot vagy egymást átfedik,
+        figyelmeztetést ír ki és levágja az értékeket.
+
+        Visszaad:
+            dict: {0: (0, 0), 1: (1, z1_max), 2: (z1_max+1, z2_max), 3: (z2_max+1, max_watt)}
+        """
         z1_max = int(self.ftp * self.zone_thresholds['z1_max_percent'] / 100)
         z2_max = int(self.ftp * self.zone_thresholds['z2_max_percent'] / 100)
 
@@ -842,6 +1031,11 @@ class PowerZoneController:
 
     @property
     def hr_zones(self):
+        """Kiszámítja a HR zóna határokat bpm-ben.
+
+        Visszaad:
+            dict: {'resting_hr': int, 'z1_max': int, 'z2_max': int}
+        """
         max_hr = self.hr_zone_settings['max_hr']
         z1_max = int(max_hr * self.hr_zone_settings['z1_max_percent'] / 100)
         z2_max = int(max_hr * self.hr_zone_settings['z2_max_percent'] / 100)
@@ -852,6 +1046,19 @@ class PowerZoneController:
         }
 
     def get_hr_zone(self, hr):
+        """Meghatározza a HR zónát (0–3) a megadott szívfrekvencia alapján.
+
+        Zóna 0: 0 bpm vagy pihenő HR alatt
+        Zóna 1: pihenő HR – Z1 határ
+        Zóna 2: Z1 határ – Z2 határ
+        Zóna 3: Z2 határ felett
+
+        Paraméterek:
+            hr (int): A szívfrekvencia bpm-ben.
+
+        Visszaad:
+            int: A zóna szintje (0–3).
+        """
         if hr == 0 or hr < self.hr_zone_settings['resting_hr']:
             return 0
         max_hr = self.hr_zone_settings['max_hr']
@@ -864,6 +1071,14 @@ class PowerZoneController:
         return 3
 
     def is_valid_power(self, power):
+        """Ellenőrzi, hogy az érték érvényes teljesítmény adat-e.
+
+        Paraméterek:
+            power: Az ellenőrizendő érték.
+
+        Visszaad:
+            bool: True, ha szám, nem negatív, és nem haladja meg a max_watt-ot.
+        """
         try:
             if not isinstance(power, (int, float)):
                 return False
@@ -876,6 +1091,14 @@ class PowerZoneController:
             return False
 
     def get_zone_for_power(self, power):
+        """Meghatározza a teljesítmény zónát (0–3) a megadott wattérték alapján.
+
+        Paraméterek:
+            power (int|float): A teljesítmény wattban.
+
+        Visszaad:
+            int: A zóna szintje (0–3). Ha egyik határon sem belül, Z3-at ad vissza.
+        """
         if power == 0:
             return 0
         for zone, (min_p, max_p) in self.zones.items():
@@ -884,6 +1107,13 @@ class PowerZoneController:
         return 3
 
     def check_dropout(self):
+        """Adatforrás kiesés detektálása és Z0-ra kapcsolás.
+
+        Ha a legutóbbi adat óta eltelt idő eléri a dropout_timeout-ot,
+        és az aktuális zóna nem 0, akkor Z0-ra vált és elküldi a BLE parancsot.
+        Ez megakadályozza, hogy az utolsó zónán maradjon végtelen ideig.
+        Másodpercenként hívja a _dropout_check_loop.
+        """
         current_time = time.time()
         time_since_last_data = current_time - self.last_data_time
 
@@ -903,6 +1133,18 @@ class PowerZoneController:
                 self.ble.send_command_sync(0)
 
     def check_cooldown_and_apply(self, new_zone):
+        """Ellenőrzi, hogy a cooldown lejárt-e, és szükség esetén alkalmazza az új zónát.
+
+        Ha a cooldown_seconds idő eltelt, végrehajtja a zónaváltást.
+        Ha még nem járt le, frissíti a várakozó zónát, és 10 másodpercenként
+        kiírja a hátralévő időt.
+
+        Paraméterek:
+            new_zone (int): Az alkalmazni kívánt célzóna (0–3).
+
+        Visszaad:
+            int|None: A küldendő zóna szintje, ha zónaváltás történt; None egyébként.
+        """
         current_time = time.time()
         time_elapsed = current_time - self.cooldown_start_time
         send_zone = None
@@ -935,6 +1177,22 @@ class PowerZoneController:
         return send_zone
 
     def should_change_zone(self, new_zone):
+        """Eldönti, hogy szükséges-e zónaváltás, és kezeli a cooldown logikát.
+
+        Zónaváltás szabályai:
+            - Zóna növelés: azonnal, cooldown nélkül
+            - Zóna csökkentés: cooldown_seconds várakozás után
+            - 0W (zero_power_immediate=True): azonnal, cooldown nélkül
+            - 0W (zero_power_immediate=False): cooldown szükséges
+            - Aktív cooldown alatt zóna emelkedés: cooldown törlése
+
+        Paraméterek:
+            new_zone (int): Az új célzóna (0–3).
+
+        Visszaad:
+            bool: True, ha azonnali zónaváltás szükséges; False, ha cooldown indul
+                  vagy nincs szükség változtatásra.
+        """
         current_time = time.time()
 
         # --- 0W (leállás) kezelés explicit ---
@@ -986,6 +1244,23 @@ class PowerZoneController:
         return False
 
     def process_power_data(self, power):
+        """Feldolgoz egy érkező teljesítmény adatpontot.
+
+        Hozzáadja az értéket a pufferhez, kiszámítja az átlagot,
+        meghatározza az új zónát, és szükség esetén BLE parancsot küld.
+
+        Buffer/átlagolás logika:
+            Az utolsó buffer_seconds×4 minta átlagát számítja. Ha még nincs
+            elég minta (minimum_samples), csak gyűjt, nem dönt.
+
+        Zónaváltás logika a zone_mode alapján:
+            - "power_only" és "higher_wins": teljesítmény alapján dönt
+            - "hr_only": csak tárolja (dropout detektáláshoz), nem vált
+            - "higher_wins": a teljesítmény és HR zóna közül a nagyobbat veszi
+
+        Paraméterek:
+            power (int|float): Az azonnali teljesítmény wattban.
+        """
         with self.state_lock:
             self.last_data_time = time.time()
 
@@ -1032,6 +1307,19 @@ class PowerZoneController:
             self.ble.send_command_sync(send_zone)
 
     def process_heart_rate_data(self, hr):
+        """Feldolgoz egy érkező szívfrekvencia adatpontot.
+
+        Ha a HR zóna ki van kapcsolva (enabled=False), csak megjeleníti
+        a bpm értéket. Ha be van kapcsolva, a zone_mode alapján dönt:
+
+        zone_mode logika:
+            - "power_only": csak kiírja a HR-t, nem befolyásolja a zónát
+            - "hr_only":    csak a HR zóna alapján vált ventilátort
+            - "higher_wins": a HR és teljesítmény zóna közül a nagyobb dönt
+
+        Paraméterek:
+            hr (int|float): A szívfrekvencia bpm-ben (érvényes: 1–250).
+        """
         try:
             hr = int(hr)
         except (TypeError, ValueError):
@@ -1080,7 +1368,30 @@ class PowerZoneController:
 # ZwiftSource - Zwift UDP adatforrás
 # ============================================================
 class ZwiftSource:
+    """Zwift UDP adatforrás – teljesítmény és szívfrekvencia beolvasása Zwiftből.
+
+    A Zwift játék UDP csomagjait hallgatja, amelyek protobuf formátumban
+    tartalmaznak PlayerState adatokat. Támogatja a natív protobuf parsert
+    (ha a zwift_pb2 modul elérhető) és egy kézi varint-alapú parsert is.
+
+    A forrás aktív/passzív állapotba kapcsolható (set_active), hogy a
+    DataSourceManager kezelni tudja az ANT+/Zwift fallback logikát.
+
+    Attribútumok:
+        active (bool): Ha True, az adatokat átadja a callback-nek.
+        zwift_running (bool): True, ha a Zwift folyamat fut (psutil alapján).
+    """
+
     def __init__(self, settings, callback, hr_callback=None):
+        """Inicializálja a ZwiftSource-t.
+
+        Paraméterek:
+            settings (dict): A 'data_source.zwift' beállítások dict-je
+                             (host, port, process_name, check_interval).
+            callback (callable): Függvény, amelyet teljesítmény adatnál hív meg (power_watts).
+            hr_callback (callable|None): Függvény, amelyet HR adatnál hív meg (hr_bpm).
+                                         None esetén HR adatot nem dolgoz fel.
+        """
         self.host = settings['host']
         self.port = settings['port']
         self.process_name = settings['process_name']
@@ -1098,10 +1409,17 @@ class ZwiftSource:
 
     @property
     def active(self):
+        """Thread-biztos olvasás: True, ha a forrás aktív (adatokat ad át a callback-nek)."""
         with self._active_lock:
             return self._active
+        """Beállítja a forrás aktív/passzív állapotát thread-biztosan.
 
-    def set_active(self, active):
+        Ha az állapot megváltozik, konzolra ír. Passzív állapotban az UDP
+        csomagokat fogja, de nem adja át a callback-nek.
+
+        Paraméterek:
+            active (bool): True = aktív (adatok átadása), False = passzív.
+        """
         with self._active_lock:
             changed = active != self._active
             self._active = active
@@ -1110,6 +1428,13 @@ class ZwiftSource:
             print(f"{'✓' if active else '⚠'} Zwift forrás {state}")
 
     def is_zwift_running(self):
+        """Ellenőrzi, hogy a Zwift folyamat fut-e (psutil segítségével).
+
+        Ha a psutil nem elérhető, mindig True-t ad vissza (feltételezi a futást).
+
+        Visszaad:
+            bool: True, ha a Zwift folyamat megtalálható; False egyébként.
+        """
         if not PSUTIL_AVAILABLE:
             return True
         try:
@@ -1122,6 +1447,16 @@ class ZwiftSource:
         return False
 
     def _read_varint(self, data, offset):
+        """Protobuf varint dekódolása nyers bájt adatból.
+
+        Paraméterek:
+            data (bytes): A nyers bájt adat.
+            offset (int): Az olvasás kezdő pozíciója.
+
+        Visszaad:
+            tuple: (value, new_offset) – az érték és az új olvasási pozíció;
+                   (None, offset) ha a dekódolás sikertelen.
+        """
         value = 0
         shift = 0
         byte_count = 0
@@ -1136,6 +1471,17 @@ class ZwiftSource:
         return None, offset
 
     def _parse_power(self, data):
+        """Teljesítmény érték kinyerése Zwift UDP csomagból.
+
+        Először protobuf parserrel próbálkozik (PlayerState.power, field 4),
+        majd kézi varint-alapú parserrel, ha a protobuf nem elérhető.
+
+        Paraméterek:
+            data (bytes): A Zwift UDP csomag nyers bájtjai.
+
+        Visszaad:
+            int|None: A teljesítmény wattban (0–10000), vagy None, ha nem sikerült.
+        """
         if not data:
             return None
 
@@ -1192,7 +1538,17 @@ class ZwiftSource:
         return None
 
     def _parse_heart_rate(self, data):
-        """Parse heart rate (field 6) from Zwift UDP packet."""
+        """Szívfrekvencia érték kinyerése Zwift UDP csomagból (field 6).
+
+        Először protobuf parserrel próbálkozik (PlayerState.heart_rate, field 6),
+        majd kézi varint-alapú parserrel, ha a protobuf nem elérhető.
+
+        Paraméterek:
+            data (bytes): A Zwift UDP csomag nyers bájtjai.
+
+        Visszaad:
+            int|None: A szívfrekvencia bpm-ben (1–300), vagy None, ha nem sikerült.
+        """
         if not data:
             return None
 
@@ -1247,6 +1603,7 @@ class ZwiftSource:
         return None
 
     def _open_socket(self):
+        """Megnyitja az UDP socket-et a Zwift adatok fogadásához."""
         try:
             self._close_socket()
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -1259,6 +1616,7 @@ class ZwiftSource:
             self.sock = None
 
     def _close_socket(self):
+        """Lezárja az UDP socket-et, ha nyitva van."""
         if self.sock:
             try:
                 self.sock.close()
@@ -1267,7 +1625,14 @@ class ZwiftSource:
             self.sock = None
 
     def _listen_loop(self):
-        last_zwift_check = 0
+        """A Zwift UDP listener háttérszál fő ciklusa.
+
+        Rendszeres időközönként ellenőrzi, hogy a Zwift fut-e (psutil).
+        Ha fut, megnyitja (vagy fenntartja) a socket-et és fogadja az UDP csomagokat.
+        Ha leáll, lezárja a socket-et és vár.
+        Az érkező csomagokból kinyeri a teljesítményt és/vagy a HR-t,
+        és csak akkor adja át a callback-nek, ha a forrás aktív.
+        """
 
         while self.running:
             current_time = time.time()
@@ -1316,6 +1681,7 @@ class ZwiftSource:
                 time.sleep(1)
 
     def start(self):
+        """Elindítja a Zwift UDP listener háttérszálat."""
         if self.running:
             return
         self.running = True
@@ -1328,6 +1694,7 @@ class ZwiftSource:
         print("✓ Zwift UDP listener elindítva")
 
     def stop(self):
+        """Leállítja a Zwift UDP listener háttérszálat és lezárja a socket-et."""
         self.running = False
         self._close_socket()
         if self.thread and self.thread.is_alive():
@@ -1339,7 +1706,19 @@ class ZwiftSource:
 # BLEBridgeServer - ANT+ → BLE broadcast
 # ============================================================
 class BLEBridgeServer:
-    """Re-broadcasts ANT+ power and heart rate data as BLE GATT services."""
+    """ANT+ adatok BLE GATT szolgáltatásként való sugárzása (bridge/híd funkció).
+
+    Az ANT+ power meter és HR monitor adatait BLE szabványos GATT
+    profilok formájában sugározza, hogy más BLE-kompatibilis eszközök
+    (pl. Garmin óra, telefon) is lássák az adatokat.
+
+    Szabványos GATT profilok:
+        - Cycling Power Service (UUID: 0x1818) – teljesítmény adat
+        - Heart Rate Service  (UUID: 0x180D) – szívfrekvencia adat
+
+    A bridge csak akkor aktív, ha az antplus_bridge.enabled=True és
+    a bless könyvtár telepítve van.
+    """
 
     CYCLING_POWER_SERVICE_UUID = "00001818-0000-1000-8000-00805f9b34fb"
     CYCLING_POWER_MEASUREMENT_UUID = "00002a63-0000-1000-8000-00805f9b34fb"
@@ -1347,6 +1726,12 @@ class BLEBridgeServer:
     HEART_RATE_MEASUREMENT_UUID = "00002a37-0000-1000-8000-00805f9b34fb"
 
     def __init__(self, settings):
+        """Inicializálja a BLEBridgeServer-t.
+
+        Paraméterek:
+            settings (dict): A teljes beállítások dict-je; az 'antplus_bridge'
+                             kulcs alatt lévő értékeket olvassa ki.
+        """
         bridge = settings.get('antplus_bridge', {})
         self.enabled = bridge.get('enabled', False)
         broadcast = bridge.get('ble_broadcast', {})
@@ -1361,9 +1746,19 @@ class BLEBridgeServer:
         self._running = False
 
     def is_active(self):
+        """Visszaadja, hogy a BLE bridge aktív-e (enabled és broadcast_enabled egyaránt True).
+
+        Visszaad:
+            bool: True, ha a bridge aktív.
+        """
         return self.enabled and self.broadcast_enabled
 
     def start(self):
+        """Elindítja a BLE Bridge háttérszálat.
+
+        Ha a bridge nem aktív (is_active()==False) vagy a bless könyvtár
+        nem elérhető, nem csinál semmit.
+        """
         if not self.is_active():
             return
         if not BLESS_AVAILABLE:
@@ -1379,6 +1774,7 @@ class BLEBridgeServer:
         print("✓ BLE Bridge thread elindítva")
 
     def _run_loop(self):
+        """A BLE Bridge háttérszál belépési pontja – asyncio event loop-ot futtat."""
         try:
             self._loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self._loop)
@@ -1391,6 +1787,12 @@ class BLEBridgeServer:
             print("✓ BLE Bridge thread leállt")
 
     async def _async_run(self):
+        """Aszinkron BLE GATT szerver inicializálása és futtatása.
+
+        Létrehozza a BlessServer-t, regisztrálja az engedélyezett
+        GATT szervizeket és karakterisztikákat, elindítja a szervert,
+        majd várakozik a _running jelzőre.
+        """
         try:
             self._server = BlessServer(self.device_name, loop=self._loop)
 
@@ -1426,6 +1828,11 @@ class BLEBridgeServer:
             print(f"✗ BLE Bridge hiba: {e}")
 
     def _do_update_power(self, value):
+        """Az event loop-ban futó helper: frissíti a Cycling Power karakterisztikát.
+
+        Paraméterek:
+            value (bytearray): A 4 bájtos Cycling Power Measurement érték.
+        """
         try:
             char = self._server.get_characteristic(self.CYCLING_POWER_MEASUREMENT_UUID)
             if char:
@@ -1438,6 +1845,11 @@ class BLEBridgeServer:
             pass
 
     def _do_update_heart_rate(self, value):
+        """Az event loop-ban futó helper: frissíti a Heart Rate karakterisztikát.
+
+        Paraméterek:
+            value (bytearray): A 2 bájtos Heart Rate Measurement érték.
+        """
         try:
             char = self._server.get_characteristic(self.HEART_RATE_MEASUREMENT_UUID)
             if char:
@@ -1450,6 +1862,14 @@ class BLEBridgeServer:
             pass
 
     def update_power(self, power_watts):
+        """Teljesítmény adat frissítése a BLE Cycling Power GATT karakterisztikán.
+
+        Thread-biztos: az event loop-ba delegálja a tényleges írást.
+        A Cycling Power Measurement formátum: [flags_lo, flags_hi, power_lo, power_hi].
+
+        Paraméterek:
+            power_watts (int|float): A teljesítmény wattban (-32768–32767).
+        """
         if not self._running or not self._server or not self.power_service_enabled:
             return
         try:
@@ -1465,6 +1885,14 @@ class BLEBridgeServer:
             pass
 
     def update_heart_rate(self, hr_bpm):
+        """Szívfrekvencia adat frissítése a BLE Heart Rate GATT karakterisztikán.
+
+        Thread-biztos: az event loop-ba delegálja a tényleges írást.
+        A Heart Rate Measurement formátum: [flags, hr_value].
+
+        Paraméterek:
+            hr_bpm (int|float): A szívfrekvencia bpm-ben (0–255).
+        """
         if not self._running or not self._server or not self.hr_service_enabled:
             return
         try:
@@ -1476,6 +1904,7 @@ class BLEBridgeServer:
             pass
 
     def stop(self):
+        """Leállítja a BLE Bridge háttérszálat."""
         self._running = False
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=3)
@@ -1485,13 +1914,46 @@ class BLEBridgeServer:
 # DataSourceManager - ANT+ / Zwift kezelő
 # ============================================================
 class DataSourceManager:
+    """ANT+ és Zwift adatforrások kezelője, fallback logikával.
+
+    Kezeli az elsődleges és tartalék adatforrásokat, és a
+    DataSourceManager.ANTPLUS_STARTUP_GRACE másodperces türelmi idő
+    lejárta után automatikusan Zwift fallback-re vált, ha az ANT+ kiesik.
+
+    ANT+ → Zwift fallback logika:
+        1. Induláskor ANTPLUS_STARTUP_GRACE (30s) türelmi idő indul.
+        2. A türelmi idő alatt a Zwift passzív (nem ad át adatot).
+        3. A türelmi idő után: ha az ANT+ adatai frissek, Zwift passzív marad.
+        4. Ha az ANT+ kiesik (dropout_timeout-on belül nincs adat),
+           a Zwift aktívvá válik.
+        5. Ha az ANT+ visszaáll, a Zwift ismét passzívvá válik.
+
+    A szívfrekvencia forrásának kezelése heart_rate_source alapján:
+        - "antplus": csak ANT+ HR adatot ad a controllernek
+        - "zwift":   csak Zwift HR adatot ad a controllernek
+        - "both":    ANT+ HR-t preferál; ha kiesett, Zwift HR-t használ
+
+    Osztályváltozók:
+        ANTPLUS_STARTUP_GRACE (int): ANT+ indulási türelmi idő (s).
+        ANTPLUS_RECONNECT_DELAY (int): ANT+ újracsatlakozási várakozás (s).
+        ANTPLUS_MAX_RETRIES (int): ANT+ maximális újracsatlakozási kísérletek.
+    """
 
     ANTPLUS_STARTUP_GRACE = 30
     ANTPLUS_RECONNECT_DELAY = 5
     ANTPLUS_MAX_RETRIES = 10
 
     def __init__(self, settings, controller):
-        self.settings = settings
+        """Inicializálja a DataSourceManager-t.
+
+        Szükség szerint létrehozza a ZwiftSource-t (ha Zwift primary vagy fallback),
+        és a BLEBridgeServer-t.
+
+        Paraméterek:
+            settings (dict): A teljes beállítások dict-je.
+            controller (PowerZoneController): A vezérlő példány, amelynek a
+                power/HR adatokat átadja.
+        """
         self.controller = controller
         self.ds_settings = settings['data_source']
 
@@ -1525,11 +1987,23 @@ class DataSourceManager:
         self.bridge = BLEBridgeServer(settings)
 
     def _on_antplus_found(self, device):
-        print(f"✓ ANT+ eszköz csatlakoztatva: {device}")
+        """Callback: ANT+ eszköz csatlakozásakor hívódik meg.
+
+        Paraméterek:
+            device: Az ANT+ eszköz objektuma.
+        """
         self.antplus_last_data = time.time()
 
     def _on_zwift_hr(self, hr):
-        """HR callback from Zwift - for 'both' mode only forwards if ANT+ HR is stale."""
+        """Zwift HR callback – 'both' módban csak akkor ad át adatot, ha az ANT+ HR kiesett.
+
+        'both' módban: ha az ANT+ HR friss (dropout_timeout-on belül érkezett),
+        a Zwift HR-t eldobja (ANT+ preferált). Ha az ANT+ HR kiesett, a Zwift
+        HR-t adja át a controllernek.
+
+        Paraméterek:
+            hr (int): A Zwift által küldött szívfrekvencia bpm-ben.
+        """
         if self.heart_rate_source == 'both':
             dropout_timeout = self.settings.get('dropout_timeout', 5)
             if time.time() - self.antplus_last_hr < dropout_timeout:
@@ -1537,6 +2011,18 @@ class DataSourceManager:
         self.controller.process_heart_rate_data(hr)
 
     def _on_antplus_data(self, page, page_name, data):
+        """Callback: ANT+ adatcsomag érkezésekor hívódik meg.
+
+        PowerData esetén: frissíti az utolsó adatidőt, átadja a controllernek,
+        és frissíti a BLE bridge-et.
+        HeartRateData esetén: frissíti a BLE bridge-et; ha a HR forrás nem
+        'zwift', akkor a controllert is értesíti.
+
+        Paraméterek:
+            page (int): ANT+ adatlap száma.
+            page_name (str): ANT+ adatlap neve.
+            data (PowerData|HeartRateData): Az ANT+ adat objektuma.
+        """
         if isinstance(data, PowerData):
             self.antplus_last_data = time.time()
             power = data.instantaneous_power
@@ -1550,12 +2036,20 @@ class DataSourceManager:
                 self.controller.process_heart_rate_data(hr)
 
     def _register_antplus_device(self, device):
-        self.antplus_devices.append(device)
+        """ANT+ eszköz regisztrálása – callback-ek beállítása.
+
+        Paraméterek:
+            device: Az ANT+ eszköz objektuma (pl. PowerMeter, HeartRate).
+        """
         device.on_found = lambda: self._on_antplus_found(device)
         device.on_device_data = self._on_antplus_data
 
     def _init_antplus_node(self):
-        self.antplus_node = Node()
+        """Inicializálja az ANT+ node-ot és regisztrálja az eszközöket.
+
+        Mindig létrehoz egy PowerMeter-t. Ha az antplus_bridge és a
+        heart_rate figyelés engedélyezett, egy HeartRate monitort is regisztrál.
+        """
         self.antplus_node.set_network_key(0x00, ANTPLUS_NETWORK_KEY)
 
         self.antplus_devices = []
@@ -1571,6 +2065,11 @@ class DataSourceManager:
                 self._register_antplus_device(hr_monitor)
 
     def _start_antplus(self):
+        """Inicializálja és elindítja az ANT+ háttérszálat.
+
+        Visszaad:
+            bool: True, ha az indítás sikeres; False egyébként.
+        """
         try:
             self._init_antplus_node()
 
@@ -1589,7 +2088,12 @@ class DataSourceManager:
             return False
 
     def _antplus_loop(self):
-        retry_count = 0
+        """Az ANT+ háttérszál fő ciklusa – újracsatlakozási logikával.
+
+        Elindítja az ANT+ node-ot. Ha hiba lép fel, ANTPLUS_RECONNECT_DELAY
+        másodpercenként újrapróbálkozik, maximum ANTPLUS_MAX_RETRIES kísérletig.
+        Ha eléri a maximumot, leáll (Zwift fallback marad aktív).
+        """
 
         while self.running:
             try:
@@ -1626,6 +2130,7 @@ class DataSourceManager:
                     time.sleep(self.ANTPLUS_RECONNECT_DELAY)
 
     def _stop_antplus_node(self):
+        """Leállítja az ANT+ node-ot és felszabadítja az eszközöket."""
         try:
             if self.antplus_devices:
                 for d in self.antplus_devices:
@@ -1641,6 +2146,7 @@ class DataSourceManager:
             pass
 
     def _stop_antplus(self):
+        """Leállítja az ANT+ forrást és nullázza az utolsó adatidőt."""
         try:
             self._stop_antplus_node()
             self.antplus_last_data = 0
@@ -1649,7 +2155,15 @@ class DataSourceManager:
             print(f"⚠ ANT+ leállítási hiba: {e}")
 
     def _monitor_loop(self):
-        check_interval = self.ds_settings['zwift']['check_interval']
+        """Adatforrás monitor háttérszál – kezeli az ANT+/Zwift fallback logikát.
+
+        check_interval másodpercenként ellenőrzi:
+            1. Az ANT+ türelmi időt (ANTPLUS_STARTUP_GRACE)
+            2. Az ANT+ adatainak frissességét (dropout_timeout alapján)
+            3. A Zwift forrás aktív/passzív állapotát a fallback logika szerint
+
+        30 másodpercenként kiírja az adatforrás státuszt a konzolra.
+        """
         dropout_timeout = self.settings['dropout_timeout']
         last_source_print = 0
         last_antplus_ok = None
@@ -1702,7 +2216,14 @@ class DataSourceManager:
                 last_source_print = current_time
 
     def start(self):
-        self.running = True
+        """Elindítja az összes adatforrást és a monitor szálat.
+
+        Indítási sorend:
+            1. ANT+ szál (ha primary vagy fallback = 'antplus')
+            2. Zwift UDP listener (ha szükséges)
+            3. Adatforrás monitor szál
+            4. BLE Bridge szerver
+        """
 
         print(f"📡 Elsődleges adatforrás: {self.primary.upper()}")
         if self.fallback != 'none':
@@ -1733,7 +2254,7 @@ class DataSourceManager:
         self.bridge.start()
 
     def stop(self):
-        self.running = False
+        """Leállítja az összes adatforrást és a BLE Bridge-et."""
 
         try:
             self._stop_antplus()
@@ -1756,7 +2277,17 @@ class DataSourceManager:
 # main()
 # ============================================================
 def main():
-    logging.disable(logging.CRITICAL)
+    """A program belépési pontja.
+
+    Inicializálási sorend:
+        1. Naplózás és stderr elnyomása (külső könyvtárak zajának szűrése)
+        2. PowerZoneController létrehozása (settings.json betöltése)
+        3. BLE szál indítása, BLE inicializálás megvárása
+        4. Dropout ellenőrző szál indítása
+        5. DataSourceManager indítása (ANT+, Zwift, BLE Bridge)
+        6. Főciklus: Ctrl+C megvárása
+        7. Leállítás: DataSource, Dropout, BLE tiszta leállítása
+    """
 
     devnull = open(os.devnull, 'w')
     sys.stderr = devnull
