@@ -1,15 +1,32 @@
-# ANT+ library
+# ============================================================
+# Smart Fan Controller - Python függőségek
+# ============================================================
+
+# --- Kötelező függőségek ---
+
+# ANT+ kommunikáció - Power Meter és Heart Rate adatok fogadása
+# USB ANT+ dongle szükséges hozzá
 openant==1.2.0
 
-# BLE library
+# BLE (Bluetooth Low Energy) kliens - ESP32 ventilátor vezérléshez
+# A program ezen keresztül küldi a LEVEL:0-3 parancsokat
 bleak>=0.21.0
 
-# BLE peripheral/server library (for ANT+ bridge)
-bless>=0.3.0
-
-# Protobuf
+# Zwift adatok feldolgozása - Protocol Buffers
+# A Zwift UDP csomagok protobuf formátumban érkeznek
 protobuf>=4.25.0
+
+# Protobuf kód generálás - zwift.proto → zwift_pb2.py
+# Csak a fejlesztéshez/generáláshoz kell, futtatáshoz nem
 grpcio-tools>=1.60.0
 
-# Process monitoring (optional)
+# --- Opcionális függőségek ---
+
+# BLE periféria/szerver - ANT+ → BLE bridge funkcióhoz
+# Csak akkor kell, ha antplus_bridge.enabled = true
+# Nélküle a bridge funkció automatikusan kikapcsol
+bless>=0.3.0
+
+# Folyamat figyelés - Zwift alkalmazás detektálása
+# Ha nincs telepítve, a program feltételezi hogy a Zwift mindig fut
 psutil>=5.9.0
