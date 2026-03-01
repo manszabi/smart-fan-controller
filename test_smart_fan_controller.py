@@ -1656,3 +1656,434 @@ class TestZwiftSourceHRParsing(unittest.TestCase):
             callback=lambda x: None
         )
         self.assertIsNone(source.hr_callback)
+
+
+class TestCheckDropoutLocking(unittest.TestCase):
+    """Test that check_dropout reads last_data_time inside state_lock."""
+
+    def setUp(self):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['skip_connection'] = True
+        settings['dropout_timeout'] = 2
+        settings['minimum_samples'] = 1
+        settings['buffer_seconds'] = 1
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings, f, indent=2)
+        f.close()
+        self._tmp = f.name
+        self.controller = PowerZoneController(f.name)
+        self.controller.ble.running = True
+        self.sent_commands = []
+        self.controller.ble.send_command_sync = lambda level: self.sent_commands.append(level)
+
+    def tearDown(self):
+        if os.path.exists(self._tmp):
+            os.unlink(self._tmp)
+
+    def test_check_dropout_reads_last_data_time_under_lock(self):
+        """check_dropout should read last_data_time under state_lock."""
+        self.controller.process_power_data(200)
+        self.controller.last_data_time = time.time() - 5
+
+        lock_acquired_during_read = []
+        real_lock = self.controller.state_lock
+
+        class TrackingLock:
+            def __enter__(self_inner):
+                lock_acquired_during_read.append(True)
+                return real_lock.__enter__()
+            def __exit__(self_inner, *args):
+                return real_lock.__exit__(*args)
+
+        self.controller.state_lock = TrackingLock()
+        self.controller.check_dropout()
+        self.assertTrue(len(lock_acquired_during_read) > 0,
+                        "state_lock should be acquired in check_dropout")
+
+    def test_dropout_zone_reset_under_lock(self):
+        """Dropout should reset zone to 0 and send command."""
+        self.controller.process_power_data(200)
+        self.assertEqual(self.controller.current_zone, 3)
+        self.sent_commands.clear()
+
+        self.controller.last_data_time = time.time() - 5
+        self.controller.check_dropout()
+        self.assertEqual(self.controller.current_zone, 0)
+        self.assertIn(0, self.sent_commands)
+
+
+class TestCooldownElif(unittest.TestCase):
+    """Test that cooldown active and should_change_zone don't run simultaneously (elif)."""
+
+    def setUp(self):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['skip_connection'] = True
+        settings['cooldown_seconds'] = 30
+        settings['minimum_samples'] = 1
+        settings['buffer_seconds'] = 1
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings, f, indent=2)
+        f.close()
+        self._tmp = f.name
+        self.controller = PowerZoneController(f.name)
+        self.controller.ble.running = True
+        self.sent_commands = []
+        self.controller.ble.send_command_sync = lambda level: self.sent_commands.append(level)
+
+    def tearDown(self):
+        if os.path.exists(self._tmp):
+            os.unlink(self._tmp)
+
+    def test_should_change_zone_not_called_during_cooldown(self):
+        """When cooldown is active, should_change_zone should not be called."""
+        self.controller.process_power_data(200)  # zone 3
+        self.sent_commands.clear()
+        self.controller.power_buffer.clear()
+        self.controller.process_power_data(50)  # zone 1 → starts cooldown
+        self.assertTrue(self.controller.cooldown_active)
+
+        call_count = []
+        original = self.controller.should_change_zone
+
+        def counting_should_change_zone(z):
+            call_count.append(z)
+            return original(z)
+
+        self.controller.should_change_zone = counting_should_change_zone
+        self.controller.power_buffer.clear()
+        self.controller.process_power_data(50)  # still zone 1, cooldown active
+        self.assertEqual(len(call_count), 0,
+                         "should_change_zone must NOT be called when cooldown_active=True")
+
+    def test_cooldown_expired_handled_by_check_cooldown_not_should_change_zone(self):
+        """When cooldown is active (even expired), check_cooldown_and_apply handles it, not should_change_zone."""
+        self.controller.process_power_data(200)  # zone 3
+        self.sent_commands.clear()
+        self.controller.power_buffer.clear()
+        self.controller.process_power_data(50)  # zone 1 → starts cooldown
+        self.assertTrue(self.controller.cooldown_active)
+        self.controller.cooldown_start_time = time.time() - 60  # expire cooldown
+
+        call_count = []
+        original = self.controller.should_change_zone
+
+        def counting_should_change_zone(z):
+            call_count.append(z)
+            return original(z)
+
+        self.controller.should_change_zone = counting_should_change_zone
+        self.controller.power_buffer.clear()
+        self.controller.process_power_data(50)  # zone 1, cooldown expired → handled by check_cooldown_and_apply
+        self.assertEqual(len(call_count), 0,
+                         "should_change_zone must NOT be called when cooldown_active=True (handled by check_cooldown_and_apply)")
+
+
+class TestParseHeartRateInvalidReturnsNone(unittest.TestCase):
+    """Test that _parse_heart_rate returns None for out-of-range HR values."""
+
+    def setUp(self):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        self.source = smart_fan_controller.ZwiftSource(
+            settings['data_source']['zwift'],
+            callback=lambda x: None
+        )
+
+    def _build_packet_with_field(self, field_number, value):
+        """Build a minimal fake protobuf packet with a single varint field."""
+        from zwift_simulator import encode_varint
+        tag = (field_number << 3) | 0  # wire type 0 = varint
+        header = b'\x00' * 4  # 4-byte header
+        return header + encode_varint(tag) + encode_varint(value)
+
+    def test_hr_out_of_range_high_returns_none(self):
+        """HR value > 300 should return None."""
+        data = self._build_packet_with_field(6, 301)
+        result = self.source._parse_heart_rate(data)
+        self.assertIsNone(result)
+
+    def test_hr_zero_returns_none(self):
+        """HR value 0 (below range 1-300) should return None."""
+        data = self._build_packet_with_field(6, 0)
+        result = self.source._parse_heart_rate(data)
+        self.assertIsNone(result)
+
+    def test_hr_boundary_valid_1(self):
+        """HR value 1 (minimum valid) should return 1."""
+        data = self._build_packet_with_field(6, 1)
+        result = self.source._parse_heart_rate(data)
+        self.assertEqual(result, 1)
+
+    def test_hr_boundary_valid_300(self):
+        """HR value 300 (maximum valid) should return 300."""
+        data = self._build_packet_with_field(6, 300)
+        result = self.source._parse_heart_rate(data)
+        self.assertEqual(result, 300)
+
+
+class TestParsePacketCombined(unittest.TestCase):
+    """Test the _parse_packet method returning power and HR together."""
+
+    def setUp(self):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        self.source = smart_fan_controller.ZwiftSource(
+            settings['data_source']['zwift'],
+            callback=lambda x: None
+        )
+
+    def test_parse_packet_returns_both_values(self):
+        """_parse_packet should return (power, hr) tuple."""
+        from zwift_simulator import create_zwift_udp_packet
+        data = create_zwift_udp_packet(200)
+        power, hr = self.source._parse_packet(data)
+        self.assertEqual(power, 200)
+        self.assertEqual(hr, 140)  # default from simulator
+
+    def test_parse_packet_empty_returns_none_none(self):
+        """Empty data should return (None, None)."""
+        power, hr = self.source._parse_packet(b'')
+        self.assertIsNone(power)
+        self.assertIsNone(hr)
+
+    def test_parse_packet_consistent_with_parse_power(self):
+        """_parse_power should return same value as first element of _parse_packet."""
+        from zwift_simulator import create_zwift_udp_packet
+        data = create_zwift_udp_packet(350)
+        power_direct = self.source._parse_power(data)
+        power_packet, _ = self.source._parse_packet(data)
+        self.assertEqual(power_direct, power_packet)
+
+    def test_parse_packet_consistent_with_parse_heart_rate(self):
+        """_parse_heart_rate should return same value as second element of _parse_packet."""
+        from zwift_simulator import create_zwift_udp_packet
+        data = create_zwift_udp_packet(200)
+        hr_direct = self.source._parse_heart_rate(data)
+        _, hr_packet = self.source._parse_packet(data)
+        self.assertEqual(hr_direct, hr_packet)
+
+
+class TestVarintTagParsing(unittest.TestCase):
+    """Test that _parse_packet handles multi-byte (varint) tags correctly."""
+
+    def setUp(self):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        self.source = smart_fan_controller.ZwiftSource(
+            settings['data_source']['zwift'],
+            callback=lambda x: None
+        )
+
+    def _encode_varint(self, value):
+        from zwift_simulator import encode_varint
+        return encode_varint(value)
+
+    def test_high_field_number_tag_parsed_correctly(self):
+        """Field number > 15 requires multi-byte varint tag encoding."""
+        # field 20, wire type 0 → tag = (20 << 3) | 0 = 160 → multi-byte varint
+        field_number = 20
+        tag = (field_number << 3) | 0
+        # tag = 160, encoded as varint = 0xA0 0x01
+        header = b'\x00' * 4
+        # Build: [high_field varint_value][power_field varint_value]
+        power_field = 4
+        power_tag = (power_field << 3) | 0  # = 32, single byte
+        data = header + self._encode_varint(tag) + self._encode_varint(999) + \
+               self._encode_varint(power_tag) + self._encode_varint(250)
+        power, _ = self.source._parse_packet(data)
+        self.assertEqual(power, 250)
+
+    def test_single_byte_tag_still_works(self):
+        """Single-byte tags (field < 16) should still work correctly."""
+        from zwift_simulator import create_zwift_udp_packet
+        data = create_zwift_udp_packet(180)
+        power, _ = self.source._parse_packet(data)
+        self.assertEqual(power, 180)
+
+
+class TestBLEDisconnectTimeout(unittest.TestCase):
+    """Test that _disconnect_async uses asyncio.wait_for with timeout."""
+
+    def setUp(self):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['skip_connection'] = True
+        self.ble = BLEController(settings)
+
+    def test_disconnect_timeout_on_hang(self):
+        """_disconnect_async should handle TimeoutError without hanging."""
+        import asyncio
+
+        mock_client = MagicMock()
+
+        async def slow_disconnect():
+            await asyncio.sleep(10)
+
+        mock_client.disconnect = slow_disconnect
+
+        self.ble.client = mock_client
+        self.ble.is_connected = True
+
+        async def run():
+            await asyncio.wait_for(self.ble._disconnect_async(), timeout=6.0)
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(run())
+        finally:
+            loop.close()
+
+        self.assertFalse(self.ble.is_connected)
+
+    def test_disconnect_clears_client_on_timeout(self):
+        """After timeout disconnect, client should be set to None."""
+        import asyncio
+
+        mock_client = MagicMock()
+
+        async def slow_disconnect():
+            await asyncio.sleep(10)
+
+        mock_client.disconnect = slow_disconnect
+        self.ble.client = mock_client
+        self.ble.is_connected = True
+
+        async def run():
+            await asyncio.wait_for(self.ble._disconnect_async(), timeout=6.0)
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(run())
+        finally:
+            loop.close()
+
+        self.assertIsNone(self.ble.client)
+
+
+class TestPsutilNoSuchProcess(unittest.TestCase):
+    """Test that is_zwift_running handles NoSuchProcess per-process."""
+
+    def setUp(self):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        self.source = smart_fan_controller.ZwiftSource(
+            settings['data_source']['zwift'],
+            callback=lambda x: None
+        )
+
+    def test_no_such_process_skipped(self):
+        """NoSuchProcess on one process should be skipped, not propagate."""
+        # Define mock exception classes that don't require psutil to be installed
+        class MockNoSuchProcess(Exception):
+            def __init__(self, pid=0):
+                self.pid = pid
+
+        class MockAccessDenied(Exception):
+            pass
+
+        mock_psutil = MagicMock()
+        mock_psutil.NoSuchProcess = MockNoSuchProcess
+        mock_psutil.AccessDenied = MockAccessDenied
+
+        dying_proc = MagicMock()
+        zwift_proc = MagicMock()
+        zwift_proc.info.get = MagicMock(return_value='ZwiftApp.exe')
+
+        def proc_iter(attrs):
+            yield dying_proc
+            yield zwift_proc
+
+        mock_psutil.process_iter = proc_iter
+        dying_proc.info.get = MagicMock(side_effect=MockNoSuchProcess(pid=9999))
+
+        orig_available = smart_fan_controller.PSUTIL_AVAILABLE
+        orig_psutil = getattr(smart_fan_controller, 'psutil', None)
+        try:
+            smart_fan_controller.PSUTIL_AVAILABLE = True
+            smart_fan_controller.psutil = mock_psutil
+            result = self.source.is_zwift_running()
+            self.assertTrue(result)
+        finally:
+            smart_fan_controller.PSUTIL_AVAILABLE = orig_available
+            if orig_psutil is None:
+                if hasattr(smart_fan_controller, 'psutil'):
+                    del smart_fan_controller.psutil
+            else:
+                smart_fan_controller.psutil = orig_psutil
+
+    def test_all_processes_gone_returns_false(self):
+        """If all processes raise NoSuchProcess, return False."""
+        class MockNoSuchProcess(Exception):
+            def __init__(self, pid=0):
+                self.pid = pid
+
+        class MockAccessDenied(Exception):
+            pass
+
+        mock_psutil = MagicMock()
+        mock_psutil.NoSuchProcess = MockNoSuchProcess
+        mock_psutil.AccessDenied = MockAccessDenied
+
+        dying_proc = MagicMock()
+
+        def proc_iter(attrs):
+            yield dying_proc
+
+        mock_psutil.process_iter = proc_iter
+        dying_proc.info.get = MagicMock(side_effect=MockNoSuchProcess(pid=1234))
+
+        orig_available = smart_fan_controller.PSUTIL_AVAILABLE
+        orig_psutil = getattr(smart_fan_controller, 'psutil', None)
+        try:
+            smart_fan_controller.PSUTIL_AVAILABLE = True
+            smart_fan_controller.psutil = mock_psutil
+            result = self.source.is_zwift_running()
+            self.assertFalse(result)
+        finally:
+            smart_fan_controller.PSUTIL_AVAILABLE = orig_available
+            if orig_psutil is None:
+                if hasattr(smart_fan_controller, 'psutil'):
+                    del smart_fan_controller.psutil
+            else:
+                smart_fan_controller.psutil = orig_psutil
+
+
+class TestAntplusLoopReconnect(unittest.TestCase):
+    """Test that _antplus_loop reconnects on normal node stop (no break)."""
+
+    def test_loop_continues_after_normal_stop(self):
+        """When antplus_node.start() returns normally, loop should retry."""
+        from smart_fan_controller import DataSourceManager
+
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['skip_connection'] = True
+        controller = PowerZoneController(settings_file=None)
+        controller.settings = settings
+
+        with patch('smart_fan_controller.Node') as MockNode, \
+             patch('smart_fan_controller.PowerMeter'), \
+             patch('smart_fan_controller.HeartRate'):
+            mock_node_instance = MagicMock()
+            MockNode.return_value = mock_node_instance
+
+            dsm = DataSourceManager.__new__(DataSourceManager)
+            dsm.running = True
+            dsm.antplus_node = mock_node_instance
+            dsm.antplus_last_data = 0
+            dsm.ANTPLUS_MAX_RETRIES = 3
+            dsm.ANTPLUS_RECONNECT_DELAY = 0
+            dsm._stop_antplus_node = MagicMock()
+            dsm._init_antplus_node = MagicMock()
+
+            call_count = [0]
+
+            def start_side_effect():
+                call_count[0] += 1
+                if call_count[0] >= 2:
+                    dsm.running = False
+
+            mock_node_instance.start = start_side_effect
+
+            dsm._antplus_loop()
+
+            self.assertGreaterEqual(call_count[0], 2,
+                                    "antplus_node.start() should be called more than once after normal stop")
+
+
+if __name__ == '__main__':
+    unittest.main()
