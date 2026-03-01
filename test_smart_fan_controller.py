@@ -3,6 +3,7 @@ import os
 import time
 import copy
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch, MagicMock
 from collections import deque
@@ -1656,3 +1657,306 @@ class TestZwiftSourceHRParsing(unittest.TestCase):
             callback=lambda x: None
         )
         self.assertIsNone(source.hr_callback)
+
+
+class TestHROnlyUpdatesLastDataTime(unittest.TestCase):
+    """BUG #26: process_heart_rate_data should update last_data_time in hr_only mode."""
+
+    def _make_controller(self, zone_mode='hr_only'):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['skip_connection'] = True
+        settings['minimum_samples'] = 1
+        settings['buffer_seconds'] = 1
+        settings['heart_rate_zones'] = {
+            'enabled': True,
+            'max_hr': 185,
+            'resting_hr': 60,
+            'zone_mode': zone_mode,
+            'z1_max_percent': 70,
+            'z2_max_percent': 80
+        }
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings, f, indent=2)
+        f.close()
+        self._tmp = f.name
+        controller = PowerZoneController(f.name)
+        controller.ble.running = True
+        controller.ble.send_command_sync = lambda level: None
+        return controller
+
+    def tearDown(self):
+        if hasattr(self, '_tmp') and os.path.exists(self._tmp):
+            os.unlink(self._tmp)
+
+    def test_hr_only_updates_last_data_time(self):
+        """In hr_only mode, process_heart_rate_data must update last_data_time."""
+        controller = self._make_controller(zone_mode='hr_only')
+        before = time.time()
+        controller.process_heart_rate_data(150)
+        self.assertGreaterEqual(controller.last_data_time, before)
+
+    def test_power_only_does_not_update_last_data_time_via_hr(self):
+        """In power_only mode, process_heart_rate_data must NOT update last_data_time."""
+        controller = self._make_controller(zone_mode='power_only')
+        old_time = controller.last_data_time
+        controller.process_heart_rate_data(150)
+        self.assertEqual(controller.last_data_time, old_time)
+
+
+class TestOnZwiftHrUsesControllerDropoutTimeout(unittest.TestCase):
+    """BUG #27: _on_zwift_hr should use controller.dropout_timeout, not settings.get()."""
+
+    def test_uses_controller_dropout_timeout(self):
+        """_on_zwift_hr must read dropout_timeout from controller attribute."""
+        from smart_fan_controller import DataSourceManager
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['skip_connection'] = True
+        settings['data_source']['heart_rate_source'] = 'both'
+        settings['dropout_timeout'] = 7  # non-default value
+
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings, f, indent=2)
+        f.close()
+        tmp = f.name
+        try:
+            controller = PowerZoneController(tmp)
+            received = []
+            controller.process_heart_rate_data = lambda hr: received.append(hr)
+
+            manager = DataSourceManager(settings, controller)
+            manager.heart_rate_source = 'both'
+            # antplus_last_hr was never set (0 by default); time.time() - 0 >> 7
+            manager.antplus_last_hr = 0
+
+            # Should NOT be blocked because ANT+ HR is stale (> dropout_timeout ago)
+            manager._on_zwift_hr(130)
+            self.assertIn(130, received)
+        finally:
+            os.unlink(tmp)
+
+
+class TestProcessHeartRateDataThreadSafety(unittest.TestCase):
+    """BUG #29: process_heart_rate_data must write current_heart_rate under state_lock."""
+
+    def _make_controller(self):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['skip_connection'] = True
+        settings['minimum_samples'] = 1
+        settings['buffer_seconds'] = 1
+        settings['heart_rate_zones']['enabled'] = False
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings, f, indent=2)
+        f.close()
+        self._tmp = f.name
+        controller = PowerZoneController(f.name)
+        controller.ble.running = True
+        controller.ble.send_command_sync = lambda level: None
+        return controller
+
+    def tearDown(self):
+        if hasattr(self, '_tmp') and os.path.exists(self._tmp):
+            os.unlink(self._tmp)
+
+    def test_current_heart_rate_updated_and_lock_released(self):
+        """After process_heart_rate_data, current_heart_rate is set and lock released."""
+        controller = self._make_controller()
+        controller.process_heart_rate_data(120)
+        self.assertEqual(controller.current_heart_rate, 120)
+        self.assertFalse(controller.state_lock.locked())
+
+    def test_concurrent_hr_writes_do_not_corrupt(self):
+        """Multiple threads writing HR should not corrupt the value."""
+        controller = self._make_controller()
+        errors = []
+
+        def write_hr(val):
+            try:
+                controller.process_heart_rate_data(val)
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=write_hr, args=(100 + i,)) for i in range(20)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(errors, [])
+        self.assertIsNotNone(controller.current_heart_rate)
+
+
+class TestBLEBridgeServerStopInFinally(unittest.TestCase):
+    """BUG #31: _async_run must call _server.stop() even when an exception occurs."""
+
+    def test_stop_called_on_exception(self):
+        """_server.stop() must be called in finally block when exception is raised."""
+        import asyncio
+        from smart_fan_controller import BLEBridgeServer
+
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['antplus_bridge']['ble_broadcast']['enabled'] = True
+        server = BLEBridgeServer(settings['antplus_bridge']['ble_broadcast'])
+        server._running = False
+        server.power_service_enabled = False
+        server.hr_service_enabled = False
+
+        stop_called = []
+
+        async def mock_start():
+            raise RuntimeError("test error")
+
+        async def mock_stop():
+            stop_called.append(True)
+
+        mock_server = MagicMock()
+        mock_server.start = mock_start
+        mock_server.stop = mock_stop
+
+        with patch('smart_fan_controller.BLESS_AVAILABLE', True), \
+             patch('smart_fan_controller.BlessServer', return_value=mock_server):
+            server._loop = asyncio.new_event_loop()
+            server._loop.run_until_complete(server._async_run())
+            server._loop.close()
+
+        self.assertEqual(stop_called, [True])
+
+    def test_stop_called_on_normal_exit(self):
+        """_server.stop() must be called in finally block on normal exit."""
+        import asyncio
+        from smart_fan_controller import BLEBridgeServer
+
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['antplus_bridge']['ble_broadcast']['enabled'] = True
+        server = BLEBridgeServer(settings['antplus_bridge']['ble_broadcast'])
+        server._running = False
+        server.power_service_enabled = False
+        server.hr_service_enabled = False
+
+        stop_called = []
+
+        async def mock_start():
+            pass
+
+        async def mock_stop():
+            stop_called.append(True)
+
+        mock_server = MagicMock()
+        mock_server.start = mock_start
+        mock_server.stop = mock_stop
+
+        with patch('smart_fan_controller.BLESS_AVAILABLE', True), \
+             patch('smart_fan_controller.BlessServer', return_value=mock_server):
+            server._loop = asyncio.new_event_loop()
+            server._loop.run_until_complete(server._async_run())
+            server._loop.close()
+
+        self.assertEqual(stop_called, [True])
+
+
+class TestOpenSocketReusePort(unittest.TestCase):
+    """BUG #33: _open_socket should attempt to set SO_REUSEPORT when available."""
+
+    def test_so_reuseport_set_when_available(self):
+        """If SO_REUSEPORT is defined, it should be passed to setsockopt."""
+        import socket as sock_module
+        MOCK_SO_REUSEPORT = 15
+        source = ZwiftSource(
+            DEFAULT_SETTINGS['data_source']['zwift'],
+            callback=lambda x: None
+        )
+        calls = []
+        mock_sock = MagicMock()
+        mock_sock.setsockopt = lambda *a: calls.append(a)
+        mock_sock.bind = MagicMock()
+        mock_sock.settimeout = MagicMock()
+
+        with patch('socket.socket', return_value=mock_sock), \
+             patch.object(source, '_close_socket'):
+            # Ensure SO_REUSEPORT is available
+            had_attr = hasattr(sock_module, 'SO_REUSEPORT')
+            if not had_attr:
+                sock_module.SO_REUSEPORT = MOCK_SO_REUSEPORT
+            try:
+                source._open_socket()
+            finally:
+                if not had_attr:
+                    delattr(sock_module, 'SO_REUSEPORT')
+
+        opt_names = [c[1] for c in calls]
+        self.assertIn(sock_module.SO_REUSEPORT if had_attr else MOCK_SO_REUSEPORT, opt_names)
+
+    def test_so_reuseport_skipped_when_unavailable(self):
+        """If SO_REUSEPORT is not defined, _open_socket should not fail."""
+        import socket as sock_module
+        source = ZwiftSource(
+            DEFAULT_SETTINGS['data_source']['zwift'],
+            callback=lambda x: None
+        )
+        mock_sock = MagicMock()
+        mock_sock.setsockopt = MagicMock()
+        mock_sock.bind = MagicMock()
+        mock_sock.settimeout = MagicMock()
+
+        with patch('socket.socket', return_value=mock_sock), \
+             patch.object(source, '_close_socket'):
+            had_attr = hasattr(sock_module, 'SO_REUSEPORT')
+            original = getattr(sock_module, 'SO_REUSEPORT', None)
+            if had_attr:
+                delattr(sock_module, 'SO_REUSEPORT')
+            try:
+                source._open_socket()  # Should not raise
+            finally:
+                if had_attr:
+                    setattr(sock_module, 'SO_REUSEPORT', original)
+
+        # SO_REUSEADDR should still be set
+        self.assertTrue(mock_sock.setsockopt.call_count >= 1)
+
+
+class TestVersionExists(unittest.TestCase):
+    """BUG #36: __version__ attribute must exist in smart_fan_controller module."""
+
+    def test_version_attribute_exists(self):
+        """smart_fan_controller must have a __version__ attribute."""
+        self.assertTrue(hasattr(smart_fan_controller, '__version__'))
+
+    def test_version_is_string(self):
+        """__version__ must be a non-empty string."""
+        self.assertIsInstance(smart_fan_controller.__version__, str)
+        self.assertGreater(len(smart_fan_controller.__version__), 0)
+
+
+class TestSaveDefaultSettingsShowsPath(unittest.TestCase):
+    """BUG #32: save_default_settings must print the absolute path."""
+
+    def _make_controller(self):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['skip_connection'] = True
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings, f, indent=2)
+        f.close()
+        self._tmp = f.name
+        return PowerZoneController(f.name)
+
+    def tearDown(self):
+        if hasattr(self, '_tmp') and os.path.exists(self._tmp):
+            os.unlink(self._tmp)
+
+    def test_success_prints_absolute_path(self):
+        """On success, save_default_settings should print the absolute path."""
+        controller = self._make_controller()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target = os.path.join(tmpdir, 'test_settings.json')
+            with patch('builtins.print') as mock_print:
+                controller.save_default_settings(target)
+            printed = ' '.join(str(c) for c in mock_print.call_args_list)
+            self.assertIn(os.path.abspath(target), printed)
+
+    def test_permission_error_prints_path(self):
+        """On PermissionError, save_default_settings should print the absolute path."""
+        controller = self._make_controller()
+        with patch('builtins.open', side_effect=PermissionError("no write")), \
+             patch('builtins.print') as mock_print:
+            controller.save_default_settings('/some/path/settings.json')
+        printed = ' '.join(str(c) for c in mock_print.call_args_list)
+        self.assertIn(os.path.abspath('/some/path/settings.json'), printed)

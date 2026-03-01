@@ -1,4 +1,3 @@
-import sys
 import os
 import logging
 import json
@@ -10,6 +9,8 @@ import queue
 import socket
 import copy
 from collections import deque
+
+__version__ = "1.1.0"
 from openant.easy.node import Node
 from openant.devices import ANTPLUS_NETWORK_KEY
 from openant.devices.power_meter import PowerMeter, PowerData
@@ -42,9 +43,12 @@ try:
 except ImportError:
     PROTOBUF_AVAILABLE = False
 
+logger = logging.getLogger('smart_fan_controller')
+
 # ============================================================
 # Alapértelmezett beállítások
 # ============================================================
+# FONTOS: NE módosítsd közvetlenül! Mindig copy.deepcopy()-val használd.
 DEFAULT_SETTINGS = {
     "ftp": 180,                    # Funkcionális küszöbteljesítmény wattban (100–500)
     "min_watt": 0,                 # Minimális érvényes teljesítmény (0 vagy több)
@@ -999,6 +1003,10 @@ class PowerZoneController:
             with open(settings_file, 'w', encoding='utf-8') as f:
                 json.dump(DEFAULT_SETTINGS, f, indent=2, ensure_ascii=False)
             print(f"✓ Alapértelmezett '{settings_file}' létrehozva.")
+            print(f"  Szerkeszd a fájlt a beállítások módosításához: {os.path.abspath(settings_file)}")
+        except PermissionError:
+            print(f"✗ Nincs írási jogosultság a '{settings_file}' fájlhoz!")
+            print(f"  Hozd létre manuálisan: {os.path.abspath(settings_file)}")
         except Exception as e:
             print(f"✗ Nem sikerült létrehozni a '{settings_file}' fájlt: {e}")
 
@@ -1336,35 +1344,41 @@ class PowerZoneController:
             return
         if hr <= 0 or hr > 220:
             return
-        self.current_heart_rate = hr
-
-        if not self.hr_zone_settings.get('enabled', False):
-            print(f"❤ Szívfrekvencia: {hr} bpm")
-            return
-
-        self.hr_buffer.append(hr)
-        avg_hr = sum(self.hr_buffer) // len(self.hr_buffer)
-        new_hr_zone = self.get_hr_zone(avg_hr)
-        self.current_hr_zone = new_hr_zone
-
-        zone_mode = self.hr_zone_settings.get('zone_mode', 'power_only')
-        print(f"❤ HR: {avg_hr} bpm | HR zóna: {new_hr_zone}")
-
-        if zone_mode == 'power_only':
-            return
 
         with self.state_lock:
+            self.current_heart_rate = hr
+
+            # hr_only módban az HR adat is frissítse a last_data_time-ot,
+            # különben a dropout checker Z0-ra kapcsol
+            zone_mode = self.hr_zone_settings.get('zone_mode', 'power_only') if self.hr_zone_settings.get('enabled', False) else 'power_only'
+            if zone_mode == 'hr_only':
+                self.last_data_time = time.time()
+
+            if not self.hr_zone_settings.get('enabled', False):
+                print(f"❤ Szívfrekvencia: {hr} bpm")
+                return
+
+            self.hr_buffer.append(hr)
+            avg_hr = sum(self.hr_buffer) // len(self.hr_buffer)
+            new_hr_zone = self.get_hr_zone(avg_hr)
+            self.current_hr_zone = new_hr_zone
+
+            zone_mode = self.hr_zone_settings.get('zone_mode', 'power_only')
+            print(f"❤ HR: {avg_hr} bpm | HR zóna: {new_hr_zone}")
+
+            if zone_mode == 'power_only':
+                return
+
             if zone_mode == 'hr_only':
                 target_zone = new_hr_zone
             else:  # higher_wins
                 target_zone = max(self.current_power_zone or 0, new_hr_zone)
 
             cooldown_send_zone = None
+            zone_change_send = None
             if self.cooldown_active:
                 cooldown_send_zone = self.check_cooldown_and_apply(target_zone)
-
-            zone_change_send = None
-            if self.current_zone is None or self.should_change_zone(target_zone):
+            elif self.current_zone is None or self.should_change_zone(target_zone):
                 self.current_zone = target_zone
                 self.last_zone_change = time.time()
                 zone_change_send = target_zone
@@ -1412,10 +1426,22 @@ class ZwiftSource:
         self.running = False
         self.thread = None
         self.sock = None
-        self.zwift_running = False
+        self._zwift_running = False
 
         self._active_lock = threading.Lock()
         self._active = False
+
+    @property
+    def zwift_running(self):
+        """Thread-biztos olvasás: True, ha a Zwift folyamat fut."""
+        with self._active_lock:
+            return self._zwift_running
+
+    @zwift_running.setter
+    def zwift_running(self, value):
+        """Thread-biztos írás a zwift_running flagre."""
+        with self._active_lock:
+            self._zwift_running = value
 
     @property
     def active(self):
@@ -1620,6 +1646,12 @@ class ZwiftSource:
             self._close_socket()
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            # Linux-on SO_REUSEPORT segít ha a port FIN_WAIT-ben van
+            if hasattr(socket, 'SO_REUSEPORT'):
+                try:
+                    self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+                except (AttributeError, OSError):
+                    pass  # Nem minden rendszeren elérhető
             self.sock.bind((self.host, self.port))
             self.sock.settimeout(0.5)
             print(f"✓ Zwift UDP socket megnyitva: {self.host}:{self.port}")
@@ -1835,10 +1867,14 @@ class BLEBridgeServer:
             while self._running:
                 await asyncio.sleep(0.1)
 
-            await self._server.stop()
-
         except Exception as e:
             print(f"✗ BLE Bridge hiba: {e}")
+        finally:
+            if self._server:
+                try:
+                    await self._server.stop()
+                except Exception:
+                    pass
 
     def _do_update_power(self, value):
         """Az event loop-ban futó helper: frissíti a Cycling Power karakterisztikát.
@@ -2021,7 +2057,7 @@ class DataSourceManager:
             hr (int): A Zwift által küldött szívfrekvencia bpm-ben.
         """
         if self.heart_rate_source == 'both':
-            dropout_timeout = self.settings.get('dropout_timeout', 5)
+            dropout_timeout = self.controller.dropout_timeout
             if time.time() - self.antplus_last_hr < dropout_timeout:
                 return  # ANT+ HR is still active, skip Zwift HR
         self.controller.process_heart_rate_data(hr)
@@ -2185,7 +2221,7 @@ class DataSourceManager:
 
         30 másodpercenként kiírja az adatforrás státuszt a konzolra.
         """
-        check_interval = self.ds_settings['zwift']['check_interval']
+        check_interval = self.ds_settings.get('zwift', {}).get('check_interval', 5)
         dropout_timeout = self.settings['dropout_timeout']
         last_source_print = 0
         last_antplus_ok = None
@@ -2314,13 +2350,18 @@ def main():
         6. Főciklus: Ctrl+C megvárása
         7. Leállítás: DataSource, Dropout, BLE tiszta leállítása
     """
-    logging.disable(logging.CRITICAL)
+    # Saját logger beállítása
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter('%(asctime)s [%(threadName)s] %(levelname)s %(message)s'))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
+    # Külső könyvtárak elnyomása
     logging.getLogger('bleak').setLevel(logging.CRITICAL)
     logging.getLogger('openant').setLevel(logging.CRITICAL)
 
     print("=" * 60)
-    print("  Smart Fan Controller - ANT+ Power Meter → BLE Fan Control")
+    print(f"  Smart Fan Controller v{__version__} - ANT+ Power Meter → BLE Fan Control")
     print("=" * 60)
     print()
 
