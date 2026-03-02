@@ -778,6 +778,119 @@ class TestBLEPINSettings(unittest.TestCase):
         ble = BLEController(settings)
         self.assertIsNone(ble.pin_code)
 
+    def test_connect_async_no_auth_when_pin_code_none(self):
+        """When pin_code is None, write_gatt_char should NOT be called during connect."""
+        import asyncio
+
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['pin_code'] = None
+        ble = BLEController(settings)
+        ble.device_address = "AA:BB:CC:DD:EE:FF"
+
+        mock_client = MagicMock()
+        mock_client.is_connected = True
+
+        async def mock_connect():
+            pass
+
+        mock_client.connect = mock_connect
+
+        async def run():
+            with patch('smart_fan_controller.BleakClient', return_value=mock_client):
+                result = await ble._connect_async()
+            return result
+
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(run())
+        finally:
+            loop.close()
+
+        self.assertTrue(result)
+        self.assertTrue(ble.is_connected)
+        mock_client.write_gatt_char.assert_not_called()
+
+    def test_connect_async_sends_auth_when_pin_code_set(self):
+        """When pin_code is set, AUTH:<pin> should be written to GATT char during connect."""
+        import asyncio
+
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['pin_code'] = 123456
+        ble = BLEController(settings)
+        ble.device_address = "AA:BB:CC:DD:EE:FF"
+
+        mock_client = MagicMock()
+        mock_client.is_connected = True
+
+        async def mock_connect():
+            pass
+
+        async def mock_write_gatt_char(uuid, data):
+            pass
+
+        mock_client.connect = mock_connect
+        mock_client.write_gatt_char = mock_write_gatt_char
+
+        written_calls = []
+
+        async def capturing_write(uuid, data):
+            written_calls.append((uuid, data))
+
+        mock_client.write_gatt_char = capturing_write
+
+        async def run():
+            with patch('smart_fan_controller.BleakClient', return_value=mock_client):
+                result = await ble._connect_async()
+            return result
+
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(run())
+        finally:
+            loop.close()
+
+        self.assertTrue(result)
+        self.assertTrue(ble.is_connected)
+        self.assertEqual(len(written_calls), 1)
+        uuid_used, data_sent = written_calls[0]
+        self.assertEqual(uuid_used, ble.characteristic_uuid)
+        self.assertEqual(data_sent, b"AUTH:123456")
+
+    def test_connect_async_continues_on_auth_error(self):
+        """If write_gatt_char raises during AUTH, is_connected should still be True."""
+        import asyncio
+
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['pin_code'] = 123456
+        ble = BLEController(settings)
+        ble.device_address = "AA:BB:CC:DD:EE:FF"
+
+        mock_client = MagicMock()
+        mock_client.is_connected = True
+
+        async def mock_connect():
+            pass
+
+        async def failing_write(uuid, data):
+            raise Exception("write error")
+
+        mock_client.connect = mock_connect
+        mock_client.write_gatt_char = failing_write
+
+        async def run():
+            with patch('smart_fan_controller.BleakClient', return_value=mock_client):
+                result = await ble._connect_async()
+            return result
+
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(run())
+        finally:
+            loop.close()
+
+        self.assertTrue(result)
+        self.assertTrue(ble.is_connected)
+
 
 class TestHRZoneSettings(unittest.TestCase):
     """Test heart_rate_zones settings validation."""
