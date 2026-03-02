@@ -572,6 +572,7 @@ class PowerZoneController:
         self.current_power_zone = None
         hr_buffer_size = int(self.buffer_seconds * 4)
         self.hr_buffer = deque(maxlen=hr_buffer_size)
+        self.last_hr_print_time = 0
 
         self.ble = BLEController(self.settings)
 
@@ -1382,10 +1383,15 @@ class PowerZoneController:
                 self.last_data_time = time.time()
 
             if not self.hr_zone_settings.get('enabled', False):
-                print(f"❤ Szívfrekvencia: {hr} bpm")
+                current_time = time.time()
+                if current_time - self.last_hr_print_time >= 1.0:
+                    print(f"❤ Szívfrekvencia: {hr} bpm")
+                    self.last_hr_print_time = current_time
                 return
 
             self.hr_buffer.append(hr)
+            if len(self.hr_buffer) < self.minimum_samples:
+                return
             avg_hr = sum(self.hr_buffer) // len(self.hr_buffer)
             new_hr_zone = self.get_hr_zone(avg_hr)
             self.current_hr_zone = new_hr_zone
