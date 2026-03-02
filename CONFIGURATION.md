@@ -6,11 +6,9 @@
 2. [Alapbeállítások](#2-alapbeállítások)
 3. [Teljesítmény zónák](#3-teljesítmény-zónák-zone_thresholds)
 4. [BLE beállítások](#4-ble-beállítások-ble)
-5. [Adatforrások](#5-adatforrások-data_source)
-6. [ANT+ Bridge](#6-ant-bridge-antplus_bridge)
-7. [Szívfrekvencia zónák](#7-szívfrekvencia-zónák-heart_rate_zones)
-8. [Példa konfigurációk](#8-példa-konfigurációk)
-9. [Hibaelhárítás](#9-hibaelhárítás)
+5. [Szívfrekvencia zónák](#5-szívfrekvencia-zónák-heart_rate_zones)
+6. [Példa konfigurációk](#6-példa-konfigurációk)
+7. [Hibaelhárítás](#7-hibaelhárítás)
 
 ---
 
@@ -178,14 +176,6 @@ A Z2 zóna felső határa az FTP százalékában. Az ennél nagyobb teljesítmé
 
 A BLE szekció az ESP32 ventilátor vezérlővel való Bluetooth kommunikációt konfigurálja.
 
-### `ble.skip_connection`
-| Tulajdonság | Érték |
-|-------------|-------|
-| Típus | Logikai (true/false) |
-| Alapértelmezett | false |
-
-**TEST MODE kapcsoló.** Ha `true`, a program nem próbál BLE kapcsolatot létesíteni – a parancsok csak a konzolon jelennek meg (`🧪 TEST MODE - Parancs: LEVEL:n`). Hasznos fejlesztéshez és konfiguráláshoz ESP32 hardver nélkül.
-
 ### `ble.device_name`
 | Tulajdonság | Érték |
 |-------------|-------|
@@ -268,156 +258,7 @@ BLE PIN kód párosításhoz. Ha `null`, nem történik PIN-alapú párosítás.
 
 ---
 
-## 5. Adatforrások (`data_source`)
-
-### `data_source.primary`
-| Tulajdonság | Érték |
-|-------------|-------|
-| Típus | Szöveg |
-| Érvényes értékek | "antplus", "zwift" |
-| Alapértelmezett | "antplus" |
-
-Az elsődleges teljesítmény adatforrás:
-- `"antplus"`: ANT+ power meter (USB ANT+ dongle szükséges)
-- `"zwift"`: Zwift szimulátorból vett UDP adat
-
-### `data_source.fallback`
-| Tulajdonság | Érték |
-|-------------|-------|
-| Típus | Szöveg |
-| Érvényes értékek | "zwift", "none" |
-| Alapértelmezett | "zwift" |
-
-Tartalék adatforrás, amelyre az elsődleges kiesése esetén vált:
-- `"zwift"`: Ha az ANT+ kiesik, Zwift UDP adatokat használ
-- `"none"`: Nincs fallback; kiesés esetén a dropout mechanizmus kezeli a helyzetet
-
-**Megjegyzés:** Az elsődlegessel nem lehet azonos.
-
-### `data_source.heart_rate_source`
-| Tulajdonság | Érték |
-|-------------|-------|
-| Típus | Szöveg |
-| Érvényes értékek | "antplus", "zwift", "both" |
-| Alapértelmezett | "antplus" |
-
-A szívfrekvencia (HR) adatforrása:
-- `"antplus"`: Csak ANT+ HR monitor adatait használja
-- `"zwift"`: Csak a Zwift UDP csomagból olvassa a HR-t
-- `"both"`: Mindkettőt figyeli; ha az ANT+ HR aktív, azt preferálja; ha kiesett, Zwift HR-t használ
-
-### `data_source.zwift`
-
-A Zwift UDP kapcsolat albeállításai.
-
-#### `data_source.zwift.port`
-| Tulajdonság | Érték |
-|-------------|-------|
-| Típus | Egész szám |
-| Érvényes tartomány | 1–65535 |
-| Alapértelmezett | 3022 |
-
-UDP port, amelyen a Zwift adatokat sugározza.
-
-#### `data_source.zwift.host`
-| Tulajdonság | Érték |
-|-------------|-------|
-| Típus | Szöveg (IP cím) |
-| Alapértelmezett | "127.0.0.1" |
-
-UDP fogadási hálózati cím. Általában `"127.0.0.1"` (localhost), ha a Zwift és a kontroller ugyanazon a gépen fut.
-
-#### `data_source.zwift.process_name`
-| Tulajdonság | Érték |
-|-------------|-------|
-| Típus | Szöveg |
-| Alapértelmezett | "ZwiftApp.exe" |
-
-A Zwift futó folyamatának neve. A program ezzel ellenőrzi, hogy a Zwift valóban fut-e. Linuxon/macOS-en `"ZwiftApp"` lehet a helyes érték.
-
-#### `data_source.zwift.check_interval`
-| Tulajdonság | Érték |
-|-------------|-------|
-| Típus | Egész szám |
-| Érvényes tartomány | 1–60 |
-| Alapértelmezett | 5 |
-
-Milyen gyakran ellenőrzi másodpercenként, hogy a Zwift fut-e. Ha a Zwift leáll, a program lezárja az UDP socket-et és vár.
-
----
-
-## 6. ANT+ Bridge (`antplus_bridge`)
-
-Az ANT+ Bridge funkció az ANT+ adatokat BLE GATT szabványos szolgáltatásokként sugározza, hogy más BLE-kompatibilis eszközök (pl. Garmin okosóra, telefon, edzésalkalmazások) is lássák az adatokat.
-
-### `antplus_bridge.enabled`
-| Tulajdonság | Érték |
-|-------------|-------|
-| Típus | Logikai (true/false) |
-| Alapértelmezett | false |
-
-Ha `true`, az ANT+ Bridge funkció aktív. Szükséges hozzá a `bless` Python könyvtár.
-
-### `antplus_bridge.heart_rate`
-
-ANT+ szívfrekvencia monitor beállítások.
-
-#### `antplus_bridge.heart_rate.enabled`
-| Tulajdonság | Érték |
-|-------------|-------|
-| Típus | Logikai (true/false) |
-| Alapértelmezett | true |
-
-Ha `true`, a program ANT+ HR monitort is figyel (a power meter mellett). Az ANT+ bridge-en belül.
-
-#### `antplus_bridge.heart_rate.device_id`
-| Tulajdonság | Érték |
-|-------------|-------|
-| Típus | Egész szám |
-| Érvényes tartomány | 0–65535 |
-| Alapértelmezett | 0 |
-
-ANT+ HR eszköz azonosítója. `0` = bármely elérhető HR monitor.
-
-### `antplus_bridge.ble_broadcast`
-
-BLE GATT sugárzás beállításai.
-
-#### `antplus_bridge.ble_broadcast.enabled`
-| Tulajdonság | Érték |
-|-------------|-------|
-| Típus | Logikai (true/false) |
-| Alapértelmezett | true |
-
-Ha `true`, a BLE GATT sugárzás aktív (az `antplus_bridge.enabled=true` mellett).
-
-#### `antplus_bridge.ble_broadcast.power_service`
-| Tulajdonság | Érték |
-|-------------|-------|
-| Típus | Logikai (true/false) |
-| Alapértelmezett | true |
-
-Ha `true`, kerékpáros teljesítmény GATT szolgáltatást sugároz (Cycling Power Service, UUID: 0x1818).
-
-#### `antplus_bridge.ble_broadcast.heart_rate_service`
-| Tulajdonság | Érték |
-|-------------|-------|
-| Típus | Logikai (true/false) |
-| Alapértelmezett | true |
-
-Ha `true`, szívfrekvencia GATT szolgáltatást sugároz (Heart Rate Service, UUID: 0x180D).
-
-#### `antplus_bridge.ble_broadcast.device_name`
-| Tulajdonság | Érték |
-|-------------|-------|
-| Típus | Szöveg |
-| Alapértelmezett | "SmartFanBridge" |
-
-A BLE bridge eszköz neve, ahogy más eszközök látják.
-
----
-
-## 7. Szívfrekvencia zónák (`heart_rate_zones`)
+## 5. Szívfrekvencia zónák (`heart_rate_zones`)
 
 A HR zóna rendszer lehetővé teszi, hogy a ventilátor a szívfrekvencia alapján is vezérelje magát, nem csak a teljesítmény alapján.
 
@@ -497,9 +338,9 @@ HR Z2 zóna felső határa a `max_hr` százalékában.
 
 ---
 
-## 8. Példa konfigurációk
+## 6. Példa konfigurációk
 
-### 8.1 Alap ANT+ power meter + ESP32 ventilátor
+### 6.1 Alap ANT+ power meter + ESP32 ventilátor
 
 A legegyszerűbb konfiguráció: ANT+ power meter adatai alapján vezérli a ventilátort.
 
@@ -518,7 +359,6 @@ A legegyszerűbb konfiguráció: ANT+ power meter adatai alapján vezérli a ven
     "z2_max_percent": 89
   },
   "ble": {
-    "skip_connection": false,
     "device_name": "FanController",
     "scan_timeout": 10,
     "connection_timeout": 15,
@@ -530,28 +370,7 @@ A legegyszerűbb konfiguráció: ANT+ power meter adatai alapján vezérli a ven
     "pin_code": null
   },
   "data_source": {
-    "primary": "antplus",
-    "fallback": "none",
-    "heart_rate_source": "antplus",
-    "zwift": {
-      "port": 3022,
-      "host": "127.0.0.1",
-      "process_name": "ZwiftApp.exe",
-      "check_interval": 5
-    }
-  },
-  "antplus_bridge": {
-    "enabled": false,
-    "heart_rate": {
-      "enabled": true,
-      "device_id": 0
-    },
-    "ble_broadcast": {
-      "enabled": true,
-      "power_service": true,
-      "heart_rate_service": true,
-      "device_name": "SmartFanBridge"
-    }
+    "primary": "antplus"
   },
   "heart_rate_zones": {
     "enabled": false,
@@ -566,46 +385,9 @@ A legegyszerűbb konfiguráció: ANT+ power meter adatai alapján vezérli a ven
 
 ---
 
-### 8.2 Zwift-only mód
+### 6.2 ANT+ power meter + HR zónák
 
-Ha csak Zwifttel edzel, ANT+ dongle nélkül.
-
-```json
-{
-  "ftp": 200,
-  "cooldown_seconds": 90,
-  "buffer_seconds": 3,
-  "ble": {
-    "skip_connection": false,
-    "device_name": "FanController",
-    "scan_timeout": 10,
-    "connection_timeout": 15,
-    "reconnect_interval": 5,
-    "max_retries": 10,
-    "command_timeout": 3,
-    "service_uuid": "0000ffe0-0000-1000-8000-00805f9b34fb",
-    "characteristic_uuid": "0000ffe1-0000-1000-8000-00805f9b34fb",
-    "pin_code": null
-  },
-  "data_source": {
-    "primary": "zwift",
-    "fallback": "none",
-    "heart_rate_source": "zwift",
-    "zwift": {
-      "port": 3022,
-      "host": "127.0.0.1",
-      "process_name": "ZwiftApp.exe",
-      "check_interval": 5
-    }
-  }
-}
-```
-
----
-
-### 8.3 ANT+ elsődleges + Zwift fallback + HR zónák
-
-Teljes konfiguráció: ANT+ power meter, Zwift tartalék, szívfrekvencia alapú zónák is.
+ANT+ power meter és szívfrekvencia alapú zónák is.
 
 ```json
 {
@@ -620,7 +402,6 @@ Teljes konfiguráció: ANT+ power meter, Zwift tartalék, szívfrekvencia alapú
     "z2_max_percent": 89
   },
   "ble": {
-    "skip_connection": false,
     "device_name": "FanController",
     "scan_timeout": 10,
     "connection_timeout": 15,
@@ -632,28 +413,7 @@ Teljes konfiguráció: ANT+ power meter, Zwift tartalék, szívfrekvencia alapú
     "pin_code": null
   },
   "data_source": {
-    "primary": "antplus",
-    "fallback": "zwift",
-    "heart_rate_source": "both",
-    "zwift": {
-      "port": 3022,
-      "host": "127.0.0.1",
-      "process_name": "ZwiftApp.exe",
-      "check_interval": 5
-    }
-  },
-  "antplus_bridge": {
-    "enabled": false,
-    "heart_rate": {
-      "enabled": true,
-      "device_id": 0
-    },
-    "ble_broadcast": {
-      "enabled": true,
-      "power_service": true,
-      "heart_rate_service": true,
-      "device_name": "SmartFanBridge"
-    }
+    "primary": "antplus"
   },
   "heart_rate_zones": {
     "enabled": true,
@@ -668,46 +428,7 @@ Teljes konfiguráció: ANT+ power meter, Zwift tartalék, szívfrekvencia alapú
 
 ---
 
-### 8.4 TEST MODE (BLE nélkül, fejlesztéshez)
-
-Fejlesztéshez és konfiguráláshoz, ESP32 hardver nélkül. A BLE parancsok csak a konzolon jelennek meg.
-
-```json
-{
-  "ftp": 180,
-  "cooldown_seconds": 30,
-  "buffer_seconds": 1,
-  "minimum_samples": 2,
-  "dropout_timeout": 10,
-  "ble": {
-    "skip_connection": true,
-    "device_name": "FanController",
-    "scan_timeout": 10,
-    "connection_timeout": 15,
-    "reconnect_interval": 5,
-    "max_retries": 10,
-    "command_timeout": 3,
-    "service_uuid": "0000ffe0-0000-1000-8000-00805f9b34fb",
-    "characteristic_uuid": "0000ffe1-0000-1000-8000-00805f9b34fb",
-    "pin_code": null
-  },
-  "data_source": {
-    "primary": "antplus",
-    "fallback": "zwift",
-    "heart_rate_source": "antplus",
-    "zwift": {
-      "port": 3022,
-      "host": "127.0.0.1",
-      "process_name": "ZwiftApp.exe",
-      "check_interval": 5
-    }
-  }
-}
-```
-
----
-
-## 9. Hibaelhárítás
+## 7. Hibaelhárítás
 
 ### A program nem találja a BLE eszközt
 
@@ -759,18 +480,6 @@ Fejlesztéshez és konfiguráláshoz, ESP32 hardver nélkül. A BLE parancsok cs
 **Tünetek:** Azonnal dropout üzenet jelenik meg.
 
 **Megoldás:**
-1. Ellenőrizd, hogy az adatforrás (ANT+ vagy Zwift) küld-e adatot.
+1. Ellenőrizd, hogy az ANT+ adatforrás küld-e adatot.
 2. Növeld a `dropout_timeout` értékét, ha az adatforrás lassan indul el.
-3. ANT+ esetén: várj néhány másodpercet, amíg az eszköz csatlakozik.
-
----
-
-### Zwift adatok nem érkeznek
-
-**Tünetek:** `⚠ Zwift leállt, UDP figyelés szünetel`
-
-**Megoldás:**
-1. Ellenőrizd, hogy a Zwift valóban fut-e.
-2. Ellenőrizd a `data_source.zwift.process_name` értéket – Linuxon/macOS-en eltérhet.
-3. Ellenőrizd a `data_source.zwift.port` és `host` értékeket.
-4. Ellenőrizd, hogy a tűzfal nem blokkolja-e az UDP port-ot.
+3. Várj néhány másodpercet, amíg az ANT+ eszköz csatlakozik.

@@ -1344,7 +1344,7 @@ class DataSourceManager:
 
         Elindítja az ANT+ node-ot. Ha hiba lép fel, ANTPLUS_RECONNECT_DELAY
         másodpercenként újrapróbálkozik, maximum ANTPLUS_MAX_RETRIES kísérletig.
-        Ha eléri a maximumot, leáll (Zwift fallback marad aktív).
+        Ha eléri a maximumot, leáll.
         """
         retry_count = 0
 

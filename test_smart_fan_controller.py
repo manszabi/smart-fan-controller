@@ -31,9 +31,6 @@ mock_heart_rate_module.HeartRateData = type('HeartRateData', (), {'heart_rate': 
 # Mock bleak
 sys.modules['bleak'] = MagicMock()
 
-# Mock bless
-sys.modules['bless'] = MagicMock()
-
 # Now import the module under test
 import smart_fan_controller
 from smart_fan_controller import (
@@ -1170,10 +1167,6 @@ class TestCooldownElif(unittest.TestCase):
         f.close()
         self._tmp = f.name
         controller = PowerZoneController(f.name)
-        manager = DataSourceManager(settings, controller)
-        manager.bridge = MagicMock()
-        manager.controller = MagicMock()
-        return manager
         controller.ble.running = True
         controller.ble.send_command_sync = lambda level: None
         return controller

@@ -89,13 +89,6 @@
 
   // ---- BLE (Bluetooth Low Energy) beállítások ----------------
   "ble": {
-    // Ha true: TEST MODE – a BLE kapcsolat kimarad, a parancsok csak a konzolon
-    // jelennek meg. Fejlesztéshez és teszteléshez hasznos ESP32 hardver nélkül.
-    // Ha false: valós BLE kapcsolatot próbál létesíteni.
-    // Érvényes értékek: true, false
-    // Alapértelmezett: false
-    "skip_connection": false,
-
     // A BLE eszköz neve, amelyhez csatlakozni kell (pontosan így kell megadni,
     // ahogy az ESP32 hirdeti magát).
     // Típus: szöveg
@@ -150,99 +143,9 @@
   "data_source": {
     // Elsődleges adatforrás.
     // "antplus": ANT+ power meter (USB ANT+ dongle szükséges)
-    // "zwift":   Zwift szimulátorból vett adat (UDP csomag)
-    // Érvényes értékek: "antplus", "zwift"
+    // Érvényes értékek: "antplus"
     // Alapértelmezett: "antplus"
-    "primary": "antplus",
-
-    // Fallback (tartalék) adatforrás, amelyre az elsődleges kiesése esetén vált.
-    // "zwift": Zwift UDP adatforrás
-    // "none":  Nincs fallback, kiesés esetén dropout kezeli a helyzetet
-    // Az elsődlegessel azonos nem lehet.
-    // Érvényes értékek: "zwift", "none"
-    // Alapértelmezett: "zwift"
-    "fallback": "zwift",
-
-    // A szívfrekvencia (HR) adatforrása.
-    // "antplus": ANT+ HR monitor adatait használja
-    // "zwift":   Zwift UDP csomagból olvassa a HR-t
-    // "both":    Mindkettőt figyeli; ha az ANT+ aktív, azt preferálja
-    // Érvényes értékek: "antplus", "zwift", "both"
-    // Alapértelmezett: "antplus"
-    "heart_rate_source": "antplus",
-
-    // Zwift UDP kapcsolat beállításai
-    "zwift": {
-      // UDP port, amelyen a Zwift adatokat sugározza.
-      // Érvényes tartomány: 1–65535
-      // Alapértelmezett: 3022
-      "port": 3022,
-
-      // A Zwift UDP adatainak fogadási hálózati cím.
-      // Általában "127.0.0.1" (localhost), ha ugyanazon a gépen fut.
-      // Típus: szöveg (IP cím)
-      // Alapértelmezett: "127.0.0.1"
-      "host": "127.0.0.1",
-
-      // A Zwift futási folyamatának neve. A program ezzel ellenőrzi,
-      // hogy a Zwift valóban fut-e (psutil segítségével).
-      // Típus: szöveg
-      // Alapértelmezett: "ZwiftApp.exe"
-      "process_name": "ZwiftApp.exe",
-
-      // Milyen gyakran ellenőrzi (másodpercenként), hogy a Zwift fut-e.
-      // Érvényes tartomány: 1–60
-      // Alapértelmezett: 5
-      "check_interval": 5
-    }
-  },
-
-  // ---- ANT+ Bridge beállítások --------------------------------
-  "antplus_bridge": {
-    // Ha true: az ANT+ adatokat BLE GATT szolgáltatásként is sugározza,
-    // hogy más BLE-kompatibilis eszközök (pl. okosóra, telefon) is lássák.
-    // Ha false: a bridge funkció ki van kapcsolva.
-    // Érvényes értékek: true, false
-    // Alapértelmezett: false
-    "enabled": false,
-
-    // ANT+ szívfrekvencia monitor beállítások
-    "heart_rate": {
-      // Ha true: ANT+ HR monitort is figyel (a power meter mellett).
-      // Érvényes értékek: true, false
-      // Alapértelmezett: true
-      "enabled": true,
-
-      // ANT+ HR eszköz azonosítója. 0 = bármely HR monitor.
-      // Érvényes tartomány: 0–65535
-      // Alapértelmezett: 0
-      "device_id": 0
-    },
-
-    // BLE broadcast (sugárzás) beállítások
-    "ble_broadcast": {
-      // Ha true: a BLE GATT sugárzás aktív.
-      // Érvényes értékek: true, false
-      // Alapértelmezett: true
-      "enabled": true,
-
-      // Ha true: kerékpáros teljesítmény GATT szolgáltatást sugároz
-      // (Cycling Power Service, UUID: 0x1818).
-      // Érvényes értékek: true, false
-      // Alapértelmezett: true
-      "power_service": true,
-
-      // Ha true: szívfrekvencia GATT szolgáltatást sugároz
-      // (Heart Rate Service, UUID: 0x180D).
-      // Érvényes értékek: true, false
-      // Alapértelmezett: true
-      "heart_rate_service": true,
-
-      // A BLE bridge eszköz neve, ahogy más eszközök látják.
-      // Típus: szöveg
-      // Alapértelmezett: "SmartFanBridge"
-      "device_name": "SmartFanBridge"
-    }
+    "primary": "antplus"
   },
 
   // ---- Szívfrekvencia zóna beállítások ------------------------

@@ -1,3 +1,1 @@
 # Fejlesztési függőségek
-# Protobuf kód generálás - zwift.proto → zwift_pb2.py
-grpcio-tools>=1.60.0
