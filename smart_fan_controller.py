@@ -1,4 +1,5 @@
 import os
+import sys
 import logging
 import json
 import math
@@ -7,6 +8,8 @@ import asyncio
 import threading
 import queue
 import copy
+import signal
+import atexit
 from collections import deque
 
 __version__ = "1.1.0"
@@ -1528,6 +1531,31 @@ def main():
     data_manager = DataSourceManager(controller.settings, controller)
     data_manager.start()
 
+    def cleanup():
+        try:
+            data_manager.stop()
+        except Exception as e:
+            print(f"DataSource leállítási hiba: {e}")
+        try:
+            controller.stop_dropout_checker()
+        except Exception as e:
+            print(f"Dropout thread leállítási hiba: {e}")
+        try:
+            controller.ble.stop()
+        except Exception as e:
+            print(f"BLE leállítási hiba: {e}")
+        print()
+        print("✓ Program leállítva")
+        print()
+
+    atexit.register(cleanup)
+
+    def handle_sigterm(signum, frame):
+        print("\n🛑 SIGTERM fogadva, leállítás...")
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, handle_sigterm)
+
     print()
     print("🚴 Figyelés elindítva... (Ctrl+C a leállításhoz)")
     print()
@@ -1537,25 +1565,7 @@ def main():
             time.sleep(1)
     except KeyboardInterrupt:
         print("\n\n🛑 Leállítás...")
-    finally:
-        try:
-            data_manager.stop()
-        except Exception as e:
-            print(f"DataSource leállítási hiba: {e}")
-
-        try:
-            controller.stop_dropout_checker()
-        except Exception as e:
-            print(f"Dropout thread leállítási hiba: {e}")
-
-        try:
-            controller.ble.stop()
-        except Exception as e:
-            print(f"BLE leállítási hiba: {e}")
-
-        print()
-        print("✓ Program leállítva")
-        print()
+    # finally blokk ELTÁVOLÍTVA - az atexit kezeli
 
 
 if __name__ == "__main__":
