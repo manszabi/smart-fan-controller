@@ -497,6 +497,13 @@ class PowerZoneController:
         hr_buffer_size = int(self.buffer_seconds * 4)
         self.hr_buffer = deque(maxlen=hr_buffer_size)
         self.last_hr_print_time = 0
+        self.last_power_print_time = 0
+
+        self.hr_cooldown_active = False
+        self.hr_cooldown_start_time = 0
+        self.hr_pending_zone = None
+        self.hr_active_zone = None
+        self.hr_last_cooldown_print = 0
 
         self.ble = BLEController(self.settings)
 
@@ -1099,6 +1106,95 @@ class PowerZoneController:
 
         return False
 
+    def _hr_should_change_zone(self, new_hr_zone):
+        """Eldönti, hogy szükséges-e HR zónaváltás, és kezeli az önálló HR cooldown logikát.
+
+        A should_change_zone párja, de kizárólag HR-specifikus állapotváltozókat
+        (hr_active_zone, hr_cooldown_active, stb.) használ. A zero_power_immediate
+        fogalom HR esetén nem értelmezett, ezért azt nem kezeli.
+
+        Paraméterek:
+            new_hr_zone (int): Az új HR célzóna (0–3).
+
+        Visszaad:
+            bool: True, ha azonnali zónaváltás szükséges; False, ha cooldown indul
+                  vagy nincs szükség változtatásra.
+        """
+        current_time = time.time()
+
+        if self.hr_cooldown_active:
+            if new_hr_zone >= self.hr_active_zone:
+                self.hr_cooldown_active = False
+                self.hr_pending_zone = None
+                if new_hr_zone > self.hr_active_zone:
+                    return True
+                else:
+                    return False
+            return False
+
+        if new_hr_zone == self.hr_active_zone:
+            return False
+
+        if new_hr_zone > self.hr_active_zone:
+            return True
+
+        # Zone decrease: start HR cooldown
+        self.hr_cooldown_active = True
+        self.hr_cooldown_start_time = current_time
+        self.hr_pending_zone = new_hr_zone
+        print(f"🕐 HR Cooldown indítva: {self.cooldown_seconds}s várakozás (cél: {new_hr_zone})")
+        return False
+
+    def _hr_check_cooldown_and_apply(self, new_hr_zone):
+        """Ellenőrzi, hogy a HR cooldown lejárt-e, és szükség esetén alkalmazza az új HR zónát.
+
+        A check_cooldown_and_apply párja, de kizárólag HR-specifikus állapotváltozókat
+        (hr_active_zone, hr_cooldown_active, stb.) használ.
+
+        Paraméterek:
+            new_hr_zone (int): Az alkalmazni kívánt HR célzóna (0–3).
+
+        Visszaad:
+            int|None: A döntött HR zóna, ha zónaváltás történt; None egyébként.
+        """
+        current_time = time.time()
+        send_zone = None
+
+        if new_hr_zone > self.hr_active_zone:
+            print(f"✓ HR emelkedés: cooldown törölve (új zóna: {new_hr_zone} >= jelenlegi: {self.hr_active_zone})")
+            self.hr_cooldown_active = False
+            self.hr_pending_zone = None
+            self.hr_active_zone = new_hr_zone
+            return new_hr_zone
+
+        time_elapsed = current_time - self.hr_cooldown_start_time
+
+        if time_elapsed >= self.cooldown_seconds:
+            self.hr_cooldown_active = False
+            target = new_hr_zone
+
+            if target != self.hr_active_zone:
+                print(f"✓ HR Cooldown lejárt! Zóna váltás: {self.hr_active_zone} → {target}")
+                self.hr_active_zone = target
+                send_zone = target
+            else:
+                print(f"✓ HR Cooldown lejárt, de nincs zóna váltás (már a célzónában vagyunk)")
+
+            self.hr_pending_zone = None
+        else:
+            remaining = self.cooldown_seconds - time_elapsed
+            should_print = (current_time - self.hr_last_cooldown_print) >= 10
+
+            if new_hr_zone != self.hr_pending_zone and new_hr_zone < self.hr_active_zone:
+                self.hr_pending_zone = new_hr_zone
+                print(f"🕐 HR Cooldown aktív: még {remaining:.0f}s (várakozó zóna frissítve: {new_hr_zone})")
+                self.hr_last_cooldown_print = current_time
+            elif should_print and new_hr_zone < self.hr_active_zone:
+                print(f"🕐 HR Cooldown aktív: még {remaining:.0f}s (várakozó zóna: {self.hr_pending_zone})")
+                self.hr_last_cooldown_print = current_time
+
+        return send_zone
+
     def process_power_data(self, power):
         """Feldolgoz egy érkező teljesítmény adatpontot.
 
@@ -1135,13 +1231,17 @@ class PowerZoneController:
             new_power_zone = self.get_zone_for_power(avg_power)
             self.current_power_zone = new_power_zone
 
-            print(f"Átlag teljesítmény: {avg_power}W | Jelenlegi zóna: {self.current_zone} | Új zóna: {new_power_zone}")
-
             zone_mode = self.hr_zone_settings.get('zone_mode', 'power_only') if self.hr_zone_settings.get('enabled', False) else 'power_only'
 
             if zone_mode == 'hr_only':
-                # Power only tracked for dropout detection; HR drives the fan
+                # Power tracked for dropout detection; HR drives the fan – throttled print only
+                current_time = time.time()
+                if current_time - self.last_power_print_time >= 1.0:
+                    print(f"Átlag teljesítmény: {avg_power}W | Power zóna: {new_power_zone}")
+                    self.last_power_print_time = current_time
                 return
+
+            print(f"Átlag teljesítmény: {avg_power}W | Jelenlegi zóna: {self.current_zone} | Új zóna: {new_power_zone}")
 
             if zone_mode == 'higher_wins' and self.current_hr_zone is not None:
                 new_zone = max(new_power_zone, self.current_hr_zone)
@@ -1165,12 +1265,13 @@ class PowerZoneController:
         """Feldolgoz egy érkező szívfrekvencia adatpontot.
 
         Ha a HR zóna ki van kapcsolva (enabled=False), csak megjeleníti
-        a bpm értéket. Ha be van kapcsolva, a zone_mode alapján dönt:
+        a bpm értéket (max 1×/s). Ha be van kapcsolva, mindig puffereli,
+        átlagolja és kiszámítja az új zónát saját, önálló cooldown logikával.
 
-        zone_mode logika:
-            - "power_only": csak kiírja a HR-t, nem befolyásolja a zónát
-            - "hr_only":    csak a HR zóna alapján vált ventilátort
-            - "higher_wins": a HR és teljesítmény zóna közül a nagyobb dönt
+        zone_mode logika (BLE küldés):
+            - "power_only": csak kiírja a HR-t (max 1×/s), nem küld BLE-t
+            - "hr_only":    HR zóna alapján vezérli a ventilátort
+            - "higher_wins": a HR és teljesítmény zóna közül a nagyobbat küldi
 
         Paraméterek:
             hr (int|float): A szívfrekvencia bpm-ben (érvényes: 1–220).
@@ -1205,27 +1306,38 @@ class PowerZoneController:
             new_hr_zone = self.get_hr_zone(avg_hr)
             self.current_hr_zone = new_hr_zone
 
-            zone_mode = self.hr_zone_settings.get('zone_mode', 'power_only')
-            print(f"❤ HR: {avg_hr} bpm | HR zóna: {new_hr_zone}")
+            # HR önálló zónadöntés és cooldown (zone_mode-tól függetlenül)
+            hr_cooldown_send = None
+            hr_change_send = None
+            if self.hr_cooldown_active:
+                hr_cooldown_send = self._hr_check_cooldown_and_apply(new_hr_zone)
+            elif self.hr_active_zone is None or self._hr_should_change_zone(new_hr_zone):
+                self.hr_active_zone = new_hr_zone
+                hr_change_send = new_hr_zone
+
+            hr_decided = hr_cooldown_send if hr_cooldown_send is not None else hr_change_send
 
             if zone_mode == 'power_only':
+                # Throttled print, no BLE
+                current_time = time.time()
+                if current_time - self.last_hr_print_time >= 1.0:
+                    print(f"❤ HR: {avg_hr} bpm | HR zóna: {new_hr_zone}")
+                    self.last_hr_print_time = current_time
                 return
 
-            if zone_mode == 'hr_only':
-                target_zone = new_hr_zone
-            else:  # higher_wins
-                target_zone = max(self.current_power_zone or 0, new_hr_zone)
+            print(f"❤ HR: {avg_hr} bpm | HR zóna: {new_hr_zone}")
 
-            cooldown_send_zone = None
-            zone_change_send = None
-            if self.cooldown_active:
-                cooldown_send_zone = self.check_cooldown_and_apply(target_zone)
-            elif self.current_zone is None or self.should_change_zone(target_zone):
-                self.current_zone = target_zone
-                self.last_zone_change = time.time()
-                zone_change_send = target_zone
+            send_zone = None
+            if hr_decided is not None:
+                if zone_mode == 'hr_only':
+                    combined = hr_decided
+                else:  # higher_wins
+                    combined = max(self.current_power_zone or 0, hr_decided)
 
-        send_zone = cooldown_send_zone if cooldown_send_zone is not None else zone_change_send
+                if combined != self.current_zone:
+                    self.current_zone = combined
+                    send_zone = combined
+
         if send_zone is not None:
             self.ble.send_command_sync(send_zone)
 

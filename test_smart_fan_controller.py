@@ -1040,6 +1040,67 @@ class TestHRZoneControl(unittest.TestCase):
         # All values > z2_max (148), so should be in zone 3
         self.assertEqual(controller.current_hr_zone, 3)
 
+    def test_power_only_hr_updates_hr_active_zone(self):
+        """In power_only mode, HR processing should still update hr_active_zone (independent cooldown)."""
+        controller = self._make_controller(zone_mode='power_only')
+        controller.process_heart_rate_data(175)  # zone 3
+        self.assertEqual(controller.hr_active_zone, 3)
+        self.assertEqual(controller.current_hr_zone, 3)
+        # But no BLE command sent
+        self.assertEqual(len(self.sent_commands), 0)
+
+    def test_hr_only_power_print_throttled(self):
+        """In hr_only mode, power data should be printed at most once per second."""
+        controller = self._make_controller(zone_mode='hr_only')
+        import io, sys
+        buf = io.StringIO()
+        # First call: always prints (last_power_print_time=0)
+        sys.stdout = buf
+        controller.process_power_data(200)
+        sys.stdout = sys.__stdout__
+        first_output = buf.getvalue()
+        buf.truncate(0)
+        buf.seek(0)
+        # Second call immediately: should be throttled (no print)
+        sys.stdout = buf
+        controller.process_power_data(200)
+        sys.stdout = sys.__stdout__
+        second_output = buf.getvalue()
+        self.assertIn("Power zóna", first_output)
+        self.assertEqual(second_output, "")
+
+    def test_hr_independent_cooldown_in_power_only_mode(self):
+        """HR runs independent cooldown even in power_only mode."""
+        controller = self._make_controller(zone_mode='power_only')
+        # Set HR active zone to 3
+        controller.process_heart_rate_data(175)  # zone 3
+        self.assertEqual(controller.hr_active_zone, 3)
+        # Drop HR to zone 1: should start HR cooldown (not shared power cooldown)
+        controller.hr_buffer.clear()
+        controller.process_heart_rate_data(50)  # zone 1 (< z1_max)
+        self.assertTrue(controller.hr_cooldown_active)
+        # Shared power cooldown should be unaffected
+        self.assertFalse(controller.cooldown_active)
+
+    def test_higher_wins_hr_independent_cooldown(self):
+        """In higher_wins mode, HR uses its own cooldown independently."""
+        controller = self._make_controller(zone_mode='higher_wins')
+        # Establish power zone 1
+        controller.process_power_data(50)
+        self.sent_commands.clear()
+        # Establish HR zone 3
+        controller.process_heart_rate_data(175)
+        self.assertIn(3, self.sent_commands)
+        self.assertEqual(controller.hr_active_zone, 3)
+        self.sent_commands.clear()
+        # HR drops to zone 1: HR cooldown should start, no command sent yet
+        controller.hr_buffer.clear()
+        controller.process_heart_rate_data(50)  # zone 1
+        self.assertTrue(controller.hr_cooldown_active)
+        self.assertEqual(len(self.sent_commands), 0)
+        # Power cooldown should be unaffected
+        self.assertFalse(controller.cooldown_active)
+
 
 class TestHROnlyUpdatesLastDataTime(unittest.TestCase):
     """BUG #26: process_heart_rate_data should update last_data_time in hr_only mode."""
