@@ -254,7 +254,7 @@ A BLE GATT karakterisztika UUID-je, amelyre a `LEVEL:n` parancsok íródnak.
 | Érvényes tartomány | 0–999999 vagy null |
 | Alapértelmezett | null |
 
-BLE PIN kód párosításhoz. Ha `null`, nem történik PIN-alapú párosítás. Csak akkor szükséges, ha az ESP32 firmware PIN kódot igényel a csatlakozáshoz.
+BLE PIN kód alkalmazás szintű autentikációhoz. Ha `null`, nem történik autentikáció. Ha meg van adva (pl. `123456`), a BLE kapcsolat felépítése után az első üzenetként `AUTH:123456` formátumú autentikációs üzenet kerül elküldésre a GATT karakterisztikára. Az ESP32 firmware oldalon az `AUTH:<pin>` üzenetet kell ellenőrizni, mielőtt `LEVEL:X` parancsokat fogad el.
 
 ---
 

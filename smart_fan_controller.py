@@ -49,7 +49,7 @@ DEFAULT_SETTINGS = {
         "command_timeout": 3,      # BLE parancs küldési időkorlát másodpercben (1–30)
         "service_uuid": "0000ffe0-0000-1000-8000-00805f9b34fb",         # GATT szerviz UUID
         "characteristic_uuid": "0000ffe1-0000-1000-8000-00805f9b34fb", # GATT karakterisztika UUID
-        "pin_code": None           # BLE PIN kód párosításhoz (null = nincs PIN, 0–999999)
+        "pin_code": None           # BLE PIN kód alkalmazás szintű autentikációhoz (null = nincs auth, 0–999999)
     },
     "data_source": {
         "primary": "antplus",      # Elsődleges adatforrás: "antplus"
@@ -77,6 +77,8 @@ class BLEController:
 
     Egy dedikált háttérszálban futó asyncio event loop segítségével kezeli
     a BLE kapcsolatot, parancsok sorba állítását és küldését.
+    Ha pin_code be van állítva, alkalmazás szintű PIN autentikációt végez
+    a kapcsolat felépítése után (AUTH:<pin_code> üzenet a GATT karakterisztikára).
 
     Attribútumok:
         device_name (str): A keresett BLE eszköz neve.
@@ -209,7 +211,8 @@ class BLEController:
         """Csatlakozás a korábban megtalált BLE eszközhöz.
 
         Ha már van aktív kapcsolat, nem próbál újra csatlakozni.
-        Ha pin_code be van állítva, párosítást is megkísérel.
+        Ha pin_code be van állítva, alkalmazás szintű autentikációt végez:
+        az AUTH:<pin_code> üzenetet elküldi a GATT karakterisztikára.
 
         Visszaad:
             bool: True, ha a csatlakozás sikeres; False egyébként.
@@ -226,12 +229,19 @@ class BLEController:
             )
             await self.client.connect()
             if self.pin_code is not None:
-                print(f"🔗 BLE párosítás folyamatban: {self.device_address}")
+                print(f"🔗 BLE PIN autentikáció folyamatban: {self.device_address}")
                 try:
-                    await self.client.pair()
-                    print(f"✓ BLE párosítás sikeres: {self.device_address}")
-                except Exception as pair_err:
-                    print(f"⚠ BLE párosítás hiba (folytatás): {pair_err}")
+                    auth_message = f"AUTH:{self.pin_code}"
+                    await asyncio.wait_for(
+                        self.client.write_gatt_char(
+                            self.characteristic_uuid,
+                            auth_message.encode('utf-8')
+                        ),
+                        timeout=self.command_timeout
+                    )
+                    print(f"✓ BLE PIN elküldve: {self.device_address}")
+                except Exception as auth_err:
+                    print(f"⚠ BLE PIN küldési hiba (folytatás): {auth_err}")
             self.is_connected = True
             self.retry_count = 0
             self.retry_reset_time = None
