@@ -497,6 +497,8 @@ class PowerZoneController:
         hr_buffer_size = int(self.buffer_seconds * 4)
         self.hr_buffer = deque(maxlen=hr_buffer_size)
         self.last_hr_print_time = 0
+        self.last_power_print_time = 0
+        self.last_hr_zone_print_time = 0
 
         self.ble = BLEController(self.settings)
 
@@ -1135,13 +1137,16 @@ class PowerZoneController:
             new_power_zone = self.get_zone_for_power(avg_power)
             self.current_power_zone = new_power_zone
 
-            print(f"Átlag teljesítmény: {avg_power}W | Jelenlegi zóna: {self.current_zone} | Új zóna: {new_power_zone}")
-
             zone_mode = self.hr_zone_settings.get('zone_mode', 'power_only') if self.hr_zone_settings.get('enabled', False) else 'power_only'
 
             if zone_mode == 'hr_only':
-                # Power only tracked for dropout detection; HR drives the fan
+                current_time = time.time()
+                if current_time - self.last_power_print_time >= 1.0:
+                    print(f"Átlag teljesítmény: {avg_power}W | Power zóna: {new_power_zone}")
+                    self.last_power_print_time = current_time
                 return
+
+            print(f"Átlag teljesítmény: {avg_power}W | Power zóna: {new_power_zone}")
 
             if zone_mode == 'higher_wins' and self.current_hr_zone is not None:
                 new_zone = max(new_power_zone, self.current_hr_zone)
@@ -1206,15 +1211,25 @@ class PowerZoneController:
             self.current_hr_zone = new_hr_zone
 
             zone_mode = self.hr_zone_settings.get('zone_mode', 'power_only')
-            print(f"❤ HR: {avg_hr} bpm | HR zóna: {new_hr_zone}")
 
             if zone_mode == 'power_only':
+                current_time = time.time()
+                if current_time - self.last_hr_zone_print_time >= 1.0:
+                    print(f"❤ HR: {avg_hr} bpm | HR zóna: {new_hr_zone}")
+                    self.last_hr_zone_print_time = current_time
                 return
+
+            print(f"❤ HR: {avg_hr} bpm | HR zóna: {new_hr_zone}")
 
             if zone_mode == 'hr_only':
                 target_zone = new_hr_zone
             else:  # higher_wins
-                target_zone = max(self.current_power_zone or 0, new_hr_zone)
+                if self.current_power_zone is not None:
+                    target_zone = max(self.current_power_zone, new_hr_zone)
+                    print(f"🏆 Nyertes zóna: {target_zone} (power: {self.current_power_zone}, hr: {new_hr_zone})")
+                else:
+                    target_zone = new_hr_zone
+                    print(f"🏆 Nyertes zóna: {target_zone} (hr alapján, power adat hiányzik)")
 
             cooldown_send_zone = None
             zone_change_send = None
