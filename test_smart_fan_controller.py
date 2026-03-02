@@ -1390,5 +1390,91 @@ class TestAntplusLoopRetryReset(unittest.TestCase):
             self.assertGreaterEqual(call_count[0], 2)
 
 
+class TestAntplusLoopMaxRetriesReset(unittest.TestCase):
+    """ANT+ loop should not break on max retries; instead sleep 30s and reset."""
+
+    def _make_dsm(self, mock_node_instance, max_retries=3, reconnect_delay=0):
+        from smart_fan_controller import DataSourceManager
+        dsm = DataSourceManager.__new__(DataSourceManager)
+        dsm.running = True
+        dsm.antplus_node = mock_node_instance
+        dsm.antplus_last_data = 0
+        dsm.ANTPLUS_MAX_RETRIES = max_retries
+        dsm.ANTPLUS_RECONNECT_DELAY = reconnect_delay
+        dsm._stop_antplus_node = MagicMock()
+        dsm._init_antplus_node = MagicMock()
+        return dsm
+
+    def test_exception_branch_resets_after_max_retries(self):
+        """On max retries via exception, loop should sleep 30s, reset counter and continue."""
+        with patch('smart_fan_controller.Node') as MockNode, \
+             patch('smart_fan_controller.PowerMeter'), \
+             patch('smart_fan_controller.HeartRate'), \
+             patch('smart_fan_controller.time') as mock_time:
+            mock_time.sleep = MagicMock()
+            mock_time.time = time.time
+
+            mock_node_instance = MagicMock()
+            MockNode.return_value = mock_node_instance
+
+            dsm = self._make_dsm(mock_node_instance, max_retries=2)
+
+            call_count = [0]
+
+            def start_side_effect():
+                call_count[0] += 1
+                # First two calls raise an exception (fills up retries)
+                # After the reset, stop the loop on the next call
+                if call_count[0] <= 2:
+                    raise Exception("simulated ANT+ error")
+                else:
+                    dsm.running = False
+
+            mock_node_instance.start = start_side_effect
+
+            dsm._antplus_loop()
+
+            # start() must be called at least 3 times (2 errors + 1 after reset)
+            self.assertGreaterEqual(call_count[0], 3,
+                                    "Loop should continue after max retries reset")
+            # 30s sleep should have been called once
+            sleep_calls = [c.args[0] for c in mock_time.sleep.call_args_list]
+            self.assertIn(30, sleep_calls, "Should sleep 30s on max retries")
+
+    def test_normal_stop_branch_resets_after_max_retries(self):
+        """On max retries via normal stop, loop should sleep 30s, reset counter and continue."""
+        with patch('smart_fan_controller.Node') as MockNode, \
+             patch('smart_fan_controller.PowerMeter'), \
+             patch('smart_fan_controller.HeartRate'), \
+             patch('smart_fan_controller.time') as mock_time:
+            mock_time.sleep = MagicMock()
+            mock_time.time = time.time
+
+            mock_node_instance = MagicMock()
+            MockNode.return_value = mock_node_instance
+
+            dsm = self._make_dsm(mock_node_instance, max_retries=2)
+
+            call_count = [0]
+
+            def start_side_effect():
+                call_count[0] += 1
+                # First two calls return normally (fills up retries)
+                # After the reset, stop the loop on the next call
+                if call_count[0] > 2:
+                    dsm.running = False
+
+            mock_node_instance.start = start_side_effect
+
+            dsm._antplus_loop()
+
+            # start() must be called at least 3 times (2 normal stops + 1 after reset)
+            self.assertGreaterEqual(call_count[0], 3,
+                                    "Loop should continue after max retries reset (normal stop)")
+            # 30s sleep should have been called once
+            sleep_calls = [c.args[0] for c in mock_time.sleep.call_args_list]
+            self.assertIn(30, sleep_calls, "Should sleep 30s on max retries (normal stop)")
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -1347,7 +1347,8 @@ class DataSourceManager:
 
         Elindítja az ANT+ node-ot. Ha hiba lép fel, ANTPLUS_RECONNECT_DELAY
         másodpercenként újrapróbálkozik, maximum ANTPLUS_MAX_RETRIES kísérletig.
-        Ha eléri a maximumot, leáll.
+        Ha eléri a maximumot, 30 másodpercet vár, nullázza a számlálót és
+        újrakezdi – sosem adja fel.
         """
         retry_count = 0
 
@@ -1364,6 +1365,15 @@ class DataSourceManager:
                 print(f"⚠ ANT+ node leállt, újraindítás... ({retry_count}/{self.ANTPLUS_MAX_RETRIES})")
                 self.antplus_last_data = 0
 
+                if retry_count >= self.ANTPLUS_MAX_RETRIES:
+                    print(f"⚠ Max ANT+ újracsatlakozási kísérletek elérve ({self.ANTPLUS_MAX_RETRIES})!")
+                    print(f"  30s múlva újrapróbálkozik...")
+                    time.sleep(30)
+                    if not self.running:
+                        break
+                    print(f"🔄 ANT+ retry count reset, újrapróbálkozás...")
+                    retry_count = 0
+
             except Exception as e:
                 if not self.running:
                     break
@@ -1373,10 +1383,14 @@ class DataSourceManager:
                 self.antplus_last_data = 0
 
                 if retry_count >= self.ANTPLUS_MAX_RETRIES:
-                    print(f"✗ ANT+ max újracsatlakozási kísérletek elérve ({self.ANTPLUS_MAX_RETRIES})!")
-                    print(f"  ANT+ leállítva.")
-                    self.antplus_last_data = 0
-                    break
+                    print(f"⚠ Max ANT+ újracsatlakozási kísérletek elérve ({self.ANTPLUS_MAX_RETRIES})!")
+                    print(f"  30s múlva újrapróbálkozik...")
+                    time.sleep(30)
+                    if not self.running:
+                        break
+                    print(f"🔄 ANT+ retry count reset, újrapróbálkozás...")
+                    retry_count = 0
+                    continue
 
                 print(f"🔄 ANT+ újracsatlakozás {self.ANTPLUS_RECONNECT_DELAY}s múlva...")
                 time.sleep(self.ANTPLUS_RECONNECT_DELAY)
