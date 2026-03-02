@@ -1059,14 +1059,6 @@ class TestHROnlyUpdatesLastDataTime(unittest.TestCase):
             'z1_max_percent': 70,
             'z2_max_percent': 80
         }
-class TestCheckDropoutLocking(unittest.TestCase):
-    """Test that check_dropout reads last_data_time inside state_lock."""
-
-    def setUp(self):
-        settings = copy.deepcopy(DEFAULT_SETTINGS)
-        settings['dropout_timeout'] = 2
-        settings['minimum_samples'] = 1
-        settings['buffer_seconds'] = 1
         f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
         json.dump(settings, f, indent=2)
         f.close()
@@ -1093,6 +1085,27 @@ class TestCheckDropoutLocking(unittest.TestCase):
         old_time = controller.last_data_time
         controller.process_heart_rate_data(150)
         self.assertEqual(controller.last_data_time, old_time)
+
+class TestCheckDropoutLocking(unittest.TestCase):
+    """Test that check_dropout reads last_data_time inside state_lock."""
+
+    def setUp(self):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['dropout_timeout'] = 2
+        settings['minimum_samples'] = 1
+        settings['buffer_seconds'] = 1
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings, f, indent=2)
+        f.close()
+        self._tmp = f.name
+        controller = PowerZoneController(f.name)
+        controller.ble.running = True
+        controller.ble.send_command_sync = lambda level: None
+        return controller
+
+    def tearDown(self):
+        if hasattr(self, '_tmp') and os.path.exists(self._tmp):
+            os.unlink(self._tmp)
 
 
 class TestProcessHeartRateDataThreadSafety(unittest.TestCase):
