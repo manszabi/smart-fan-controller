@@ -1476,5 +1476,200 @@ class TestAntplusLoopMaxRetriesReset(unittest.TestCase):
             self.assertIn(30, sleep_calls, "Should sleep 30s on max retries (normal stop)")
 
 
+class TestHROnlyModePowerPrint(unittest.TestCase):
+    """Test that in hr_only mode, process_power_data prints throttled and sends no BLE."""
+
+    def _make_controller(self):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['minimum_samples'] = 1
+        settings['buffer_seconds'] = 1
+        settings['heart_rate_zones'] = {
+            'enabled': True,
+            'max_hr': 185,
+            'resting_hr': 60,
+            'zone_mode': 'hr_only',
+            'z1_max_percent': 70,
+            'z2_max_percent': 80
+        }
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings, f, indent=2)
+        f.close()
+        self._tmp = f.name
+        controller = PowerZoneController(f.name)
+        controller.ble.running = True
+        self.sent_commands = []
+        controller.ble.send_command_sync = lambda level: self.sent_commands.append(level)
+        return controller
+
+    def tearDown(self):
+        if hasattr(self, '_tmp') and os.path.exists(self._tmp):
+            os.unlink(self._tmp)
+
+    def test_hr_only_power_data_no_ble(self):
+        """In hr_only mode, process_power_data should not send BLE commands."""
+        controller = self._make_controller()
+        controller.process_power_data(200)
+        self.assertEqual(len(self.sent_commands), 0)
+
+    def test_hr_only_power_data_throttled_print(self):
+        """In hr_only mode, power print is throttled to max 1 per second."""
+        controller = self._make_controller()
+        with patch('builtins.print') as mock_print:
+            controller.process_power_data(200)
+            first_call_count = mock_print.call_count
+            # Second call within same second should not print power zone
+            controller.process_power_data(200)
+            # print count should not increase (throttled)
+            self.assertEqual(mock_print.call_count, first_call_count)
+
+    def test_hr_only_power_data_prints_power_zone(self):
+        """In hr_only mode, process_power_data prints power zone when throttle allows."""
+        controller = self._make_controller()
+        controller.last_power_print_time = 0  # ensure print will happen
+        with patch('builtins.print') as mock_print:
+            controller.process_power_data(200)
+        printed_args = [str(c) for c in mock_print.call_args_list]
+        self.assertTrue(any('Power zóna' in s for s in printed_args))
+
+    def test_hr_only_power_data_updates_current_power_zone(self):
+        """In hr_only mode, process_power_data still updates current_power_zone."""
+        controller = self._make_controller()
+        controller.process_power_data(200)  # zone 3
+        self.assertEqual(controller.current_power_zone, 3)
+
+
+class TestPowerOnlyModeHRPrint(unittest.TestCase):
+    """Test that in power_only mode, process_heart_rate_data prints throttled and sends no BLE."""
+
+    def _make_controller(self):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['minimum_samples'] = 1
+        settings['buffer_seconds'] = 1
+        settings['heart_rate_zones'] = {
+            'enabled': True,
+            'max_hr': 185,
+            'resting_hr': 60,
+            'zone_mode': 'power_only',
+            'z1_max_percent': 70,
+            'z2_max_percent': 80
+        }
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings, f, indent=2)
+        f.close()
+        self._tmp = f.name
+        controller = PowerZoneController(f.name)
+        controller.ble.running = True
+        self.sent_commands = []
+        controller.ble.send_command_sync = lambda level: self.sent_commands.append(level)
+        return controller
+
+    def tearDown(self):
+        if hasattr(self, '_tmp') and os.path.exists(self._tmp):
+            os.unlink(self._tmp)
+
+    def test_power_only_hr_data_no_ble(self):
+        """In power_only mode, process_heart_rate_data should not send BLE commands."""
+        controller = self._make_controller()
+        controller.process_heart_rate_data(175)
+        self.assertEqual(len(self.sent_commands), 0)
+
+    def test_power_only_hr_data_throttled_print(self):
+        """In power_only mode, HR zone print is throttled to max 1 per second."""
+        controller = self._make_controller()
+        with patch('builtins.print') as mock_print:
+            controller.process_heart_rate_data(175)
+            first_call_count = mock_print.call_count
+            # Second call within same second should not print HR zone
+            controller.process_heart_rate_data(175)
+            self.assertEqual(mock_print.call_count, first_call_count)
+
+    def test_power_only_hr_data_prints_hr_zone(self):
+        """In power_only mode, process_heart_rate_data prints HR zone when throttle allows."""
+        controller = self._make_controller()
+        controller.last_hr_zone_print_time = 0  # ensure print will happen
+        with patch('builtins.print') as mock_print:
+            controller.process_heart_rate_data(175)
+        printed_args = [str(c) for c in mock_print.call_args_list]
+        self.assertTrue(any('HR zóna' in s for s in printed_args))
+
+    def test_power_only_hr_data_updates_current_hr_zone(self):
+        """In power_only mode, process_heart_rate_data still updates current_hr_zone."""
+        controller = self._make_controller()
+        controller.process_heart_rate_data(175)  # zone 3
+        self.assertEqual(controller.current_hr_zone, 3)
+
+
+class TestHigherWinsMissingData(unittest.TestCase):
+    """Test higher_wins mode when one of the data sources is missing."""
+
+    def _make_controller(self):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['minimum_samples'] = 1
+        settings['buffer_seconds'] = 1
+        settings['heart_rate_zones'] = {
+            'enabled': True,
+            'max_hr': 185,
+            'resting_hr': 60,
+            'zone_mode': 'higher_wins',
+            'z1_max_percent': 70,
+            'z2_max_percent': 80
+        }
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings, f, indent=2)
+        f.close()
+        self._tmp = f.name
+        controller = PowerZoneController(f.name)
+        controller.ble.running = True
+        self.sent_commands = []
+        controller.ble.send_command_sync = lambda level: self.sent_commands.append(level)
+        return controller
+
+    def tearDown(self):
+        if hasattr(self, '_tmp') and os.path.exists(self._tmp):
+            os.unlink(self._tmp)
+
+    def test_higher_wins_no_hr_uses_power_zone(self):
+        """In higher_wins with no HR data, power zone should drive the fan."""
+        controller = self._make_controller()
+        self.assertIsNone(controller.current_hr_zone)
+        controller.process_power_data(200)  # zone 3
+        self.assertIn(3, self.sent_commands)
+
+    def test_higher_wins_no_power_uses_hr_zone(self):
+        """In higher_wins with no power data, HR zone should drive the fan."""
+        controller = self._make_controller()
+        self.assertIsNone(controller.current_power_zone)
+        controller.process_heart_rate_data(175)  # zone 3
+        self.assertIn(3, self.sent_commands)
+
+    def test_higher_wins_both_data_max_wins(self):
+        """In higher_wins with both data, max of power_zone and hr_zone should win."""
+        controller = self._make_controller()
+        # Set power zone to 1 (low power)
+        controller.process_power_data(50)   # zone 1
+        self.sent_commands.clear()
+        # Now set HR to zone 3 (high HR) → should win
+        controller.process_heart_rate_data(175)  # zone 3
+        self.assertIn(3, self.sent_commands)
+
+    def test_higher_wins_no_power_prints_missing_message(self):
+        """In higher_wins with no power data, prints message about missing power."""
+        controller = self._make_controller()
+        self.assertIsNone(controller.current_power_zone)
+        with patch('builtins.print') as mock_print:
+            controller.process_heart_rate_data(175)
+        printed_args = [str(c) for c in mock_print.call_args_list]
+        self.assertTrue(any('power adat hiányzik' in s for s in printed_args))
+
+    def test_higher_wins_both_data_prints_winner_zone(self):
+        """In higher_wins with both data, prints winner zone message."""
+        controller = self._make_controller()
+        controller.current_power_zone = 1
+        with patch('builtins.print') as mock_print:
+            controller.process_heart_rate_data(175)  # zone 3
+        printed_args = [str(c) for c in mock_print.call_args_list]
+        self.assertTrue(any('Nyertes zóna' in s for s in printed_args))
+
+
 if __name__ == '__main__':
     unittest.main()
