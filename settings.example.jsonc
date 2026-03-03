@@ -141,11 +141,59 @@
 
   // ---- Adatforrás beállítások ---------------------------------
   "data_source": {
-    // Elsődleges adatforrás.
+    // Power adatforrás: honnan jön a teljesítmény adat.
     // "antplus": ANT+ power meter (USB ANT+ dongle szükséges)
-    // Érvényes értékek: "antplus"
+    // "ble":     BLE power meter (ble_power_device_name szükséges)
+    // Érvényes értékek: "antplus", "ble"
     // Alapértelmezett: "antplus"
-    "primary": "antplus"
+    "power_source": "antplus",
+
+    // HR (szívfrekvencia) adatforrás: honnan jön a HR adat.
+    // "antplus": ANT+ HR öv (USB ANT+ dongle szükséges)
+    // "ble":     BLE óra/öv (ble_hr_device_name szükséges)
+    // Érvényes értékek: "antplus", "ble"
+    // Alapértelmezett: "antplus"
+    "hr_source": "antplus",
+
+    // BLE power meter eszköz neve. Szükséges, ha power_source: "ble".
+    // Típus: szöveg vagy null
+    // Alapértelmezett: null
+    "ble_power_device_name": null,
+
+    // BLE power keresési időkorlát másodpercben.
+    // Érvényes tartomány: 1–60
+    // Alapértelmezett: 10
+    "ble_power_scan_timeout": 10,
+
+    // BLE power újracsatlakozási próbálkozások közötti várakozás (s).
+    // Érvényes tartomány: 1–60
+    // Alapértelmezett: 5
+    "ble_power_reconnect_interval": 5,
+
+    // BLE power maximális újracsatlakozási kísérletek száma.
+    // Érvényes tartomány: 1–100
+    // Alapértelmezett: 10
+    "ble_power_max_retries": 10,
+
+    // BLE HR eszköz neve. Szükséges, ha hr_source: "ble".
+    // Típus: szöveg vagy null
+    // Alapértelmezett: null
+    "ble_hr_device_name": null,
+
+    // BLE HR keresési időkorlát másodpercben.
+    // Érvényes tartomány: 1–60
+    // Alapértelmezett: 10
+    "ble_hr_scan_timeout": 10,
+
+    // BLE HR újracsatlakozási próbálkozások közötti várakozás (s).
+    // Érvényes tartomány: 1–60
+    // Alapértelmezett: 5
+    "ble_hr_reconnect_interval": 5,
+
+    // BLE HR maximális újracsatlakozási kísérletek száma.
+    // Érvényes tartomány: 1–100
+    // Alapértelmezett: 10
+    "ble_hr_max_retries": 10
   },
 
   // ---- Szívfrekvencia zóna beállítások ------------------------

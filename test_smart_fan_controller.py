@@ -36,6 +36,8 @@ import smart_fan_controller
 from smart_fan_controller import (
     PowerZoneController,
     BLEController,
+    BLEPowerReceiver,
+    BLEHeartRateReceiver,
     DEFAULT_SETTINGS,
 )
 
@@ -2226,6 +2228,452 @@ class TestStaleDataInHigherWins(unittest.TestCase):
         controller.process_heart_rate_data(150)
         self.assertIsNotNone(controller.last_hr_data_time)
         self.assertGreaterEqual(controller.last_hr_data_time, before)
+
+
+class TestDataSourceDefaultSettings(unittest.TestCase):
+    """Test that DEFAULT_SETTINGS has correct data_source structure."""
+
+    def test_power_source_default(self):
+        """power_source should default to 'antplus'."""
+        self.assertEqual(DEFAULT_SETTINGS['data_source']['power_source'], 'antplus')
+
+    def test_hr_source_default(self):
+        """hr_source should default to 'antplus'."""
+        self.assertEqual(DEFAULT_SETTINGS['data_source']['hr_source'], 'antplus')
+
+    def test_ble_power_device_name_default_none(self):
+        """ble_power_device_name should default to None."""
+        self.assertIsNone(DEFAULT_SETTINGS['data_source']['ble_power_device_name'])
+
+    def test_ble_hr_device_name_default_none(self):
+        """ble_hr_device_name should default to None."""
+        self.assertIsNone(DEFAULT_SETTINGS['data_source']['ble_hr_device_name'])
+
+    def test_no_primary_key(self):
+        """'primary' key must NOT exist in DEFAULT_SETTINGS data_source."""
+        self.assertNotIn('primary', DEFAULT_SETTINGS['data_source'])
+
+    def test_ble_power_scan_timeout_default(self):
+        """ble_power_scan_timeout should default to 10."""
+        self.assertEqual(DEFAULT_SETTINGS['data_source']['ble_power_scan_timeout'], 10)
+
+    def test_ble_hr_scan_timeout_default(self):
+        """ble_hr_scan_timeout should default to 10."""
+        self.assertEqual(DEFAULT_SETTINGS['data_source']['ble_hr_scan_timeout'], 10)
+
+
+class TestDataSourceValidation(unittest.TestCase):
+    """Test data_source settings validation."""
+
+    def _create_settings_file(self, settings_dict):
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings_dict, f, indent=2)
+        f.close()
+        return f.name
+
+    def tearDown(self):
+        if hasattr(self, '_settings_file') and os.path.exists(self._settings_file):
+            os.unlink(self._settings_file)
+
+    def test_power_source_antplus(self):
+        """power_source 'antplus' should be accepted."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['power_source'] = 'antplus'
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['data_source']['power_source'], 'antplus')
+
+    def test_power_source_ble(self):
+        """power_source 'ble' should be accepted."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['power_source'] = 'ble'
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['data_source']['power_source'], 'ble')
+
+    def test_power_source_invalid_falls_back(self):
+        """Invalid power_source should fall back to default."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['power_source'] = 'invalid'
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['data_source']['power_source'],
+                         DEFAULT_SETTINGS['data_source']['power_source'])
+
+    def test_hr_source_antplus(self):
+        """hr_source 'antplus' should be accepted."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['hr_source'] = 'antplus'
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['data_source']['hr_source'], 'antplus')
+
+    def test_hr_source_ble(self):
+        """hr_source 'ble' should be accepted."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['hr_source'] = 'ble'
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['data_source']['hr_source'], 'ble')
+
+    def test_hr_source_invalid_falls_back(self):
+        """Invalid hr_source should fall back to default."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['hr_source'] = 'wifi'
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['data_source']['hr_source'],
+                         DEFAULT_SETTINGS['data_source']['hr_source'])
+
+    def test_ble_power_device_name_string(self):
+        """ble_power_device_name as a string should be accepted."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['ble_power_device_name'] = 'MyPowerMeter'
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['data_source']['ble_power_device_name'], 'MyPowerMeter')
+
+    def test_ble_power_device_name_null(self):
+        """ble_power_device_name null should be accepted."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['ble_power_device_name'] = None
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertIsNone(controller.settings['data_source']['ble_power_device_name'])
+
+    def test_ble_hr_device_name_string(self):
+        """ble_hr_device_name as a string should be accepted."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['ble_hr_device_name'] = 'MyHRWatch'
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['data_source']['ble_hr_device_name'], 'MyHRWatch')
+
+    def test_ble_power_scan_timeout_valid(self):
+        """Valid ble_power_scan_timeout should be accepted."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['ble_power_scan_timeout'] = 20
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['data_source']['ble_power_scan_timeout'], 20)
+
+    def test_ble_power_scan_timeout_invalid_falls_back(self):
+        """ble_power_scan_timeout out of range should fall back to default."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['ble_power_scan_timeout'] = 100
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['data_source']['ble_power_scan_timeout'],
+                         DEFAULT_SETTINGS['data_source']['ble_power_scan_timeout'])
+
+    def test_ble_hr_max_retries_valid(self):
+        """Valid ble_hr_max_retries should be accepted."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['ble_hr_max_retries'] = 50
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['data_source']['ble_hr_max_retries'], 50)
+
+    def test_ble_hr_max_retries_invalid_falls_back(self):
+        """ble_hr_max_retries out of range (>100) should fall back to default."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['ble_hr_max_retries'] = 200
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['data_source']['ble_hr_max_retries'],
+                         DEFAULT_SETTINGS['data_source']['ble_hr_max_retries'])
+
+    def test_primary_key_unknown(self):
+        """'primary' key in data_source should trigger unknown key warning."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['primary'] = 'antplus'
+        self._settings_file = self._create_settings_file(settings)
+        with patch('builtins.print') as mock_print:
+            controller = PowerZoneController(self._settings_file)
+        printed = ' '.join(str(c) for c in mock_print.call_args_list)
+        self.assertIn('primary', printed)
+        self.assertIn('Ismeretlen', printed)
+
+    def test_data_source_not_dict_uses_default(self):
+        """data_source as non-dict should warn and keep defaults."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source'] = "antplus"
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['data_source']['power_source'], 'antplus')
+
+
+class TestBLEPowerReceiver(unittest.TestCase):
+    """Test BLEPowerReceiver initialization and data parsing."""
+
+    def _make_settings(self, power_device_name='TestPower'):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['power_source'] = 'ble'
+        settings['data_source']['ble_power_device_name'] = power_device_name
+        settings['data_source']['ble_power_scan_timeout'] = 5
+        settings['data_source']['ble_power_reconnect_interval'] = 1
+        settings['data_source']['ble_power_max_retries'] = 3
+        return settings
+
+    def test_init_stores_settings(self):
+        """BLEPowerReceiver should store settings from data_source."""
+        settings = self._make_settings()
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings, f)
+        f.close()
+        controller = PowerZoneController(f.name)
+        os.unlink(f.name)
+
+        receiver = BLEPowerReceiver(settings, controller)
+        self.assertEqual(receiver.device_name, 'TestPower')
+        self.assertEqual(receiver.scan_timeout, 5)
+        self.assertEqual(receiver.reconnect_interval, 1)
+        self.assertEqual(receiver.max_retries, 3)
+        self.assertFalse(receiver.running)
+        self.assertFalse(receiver.is_connected)
+
+    def test_parse_power_8bit_flags(self):
+        """BLEPowerReceiver notification handler should parse instantaneous power correctly."""
+        settings = self._make_settings()
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings, f)
+        f.close()
+        controller = PowerZoneController(f.name)
+        os.unlink(f.name)
+
+        received_powers = []
+        controller.process_power_data = lambda p: received_powers.append(p)
+
+        receiver = BLEPowerReceiver(settings, controller)
+
+        # Simulate notification: flags=0x30 (2 bytes), power=200W (LE int16)
+        data = bytes([0x30, 0x00, 200, 0x00])
+        receiver.controller.process_power_data(
+            int.from_bytes(data[2:4], byteorder='little', signed=True)
+        )
+        self.assertEqual(received_powers[0], 200)
+
+    def test_stop_not_running(self):
+        """Calling stop on a non-running receiver should be safe."""
+        settings = self._make_settings()
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings, f)
+        f.close()
+        controller = PowerZoneController(f.name)
+        os.unlink(f.name)
+
+        receiver = BLEPowerReceiver(settings, controller)
+        receiver.stop()  # Should not raise
+
+
+class TestBLEHeartRateReceiver(unittest.TestCase):
+    """Test BLEHeartRateReceiver initialization and data parsing."""
+
+    def _make_settings(self, hr_device_name='TestHR'):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['hr_source'] = 'ble'
+        settings['data_source']['ble_hr_device_name'] = hr_device_name
+        settings['data_source']['ble_hr_scan_timeout'] = 5
+        settings['data_source']['ble_hr_reconnect_interval'] = 1
+        settings['data_source']['ble_hr_max_retries'] = 3
+        return settings
+
+    def test_init_stores_settings(self):
+        """BLEHeartRateReceiver should store settings from data_source."""
+        settings = self._make_settings()
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings, f)
+        f.close()
+        controller = PowerZoneController(f.name)
+        os.unlink(f.name)
+
+        receiver = BLEHeartRateReceiver(settings, controller)
+        self.assertEqual(receiver.device_name, 'TestHR')
+        self.assertEqual(receiver.scan_timeout, 5)
+        self.assertEqual(receiver.reconnect_interval, 1)
+        self.assertEqual(receiver.max_retries, 3)
+        self.assertFalse(receiver.running)
+        self.assertFalse(receiver.is_connected)
+
+    def test_parse_hr_8bit(self):
+        """BLEHeartRateReceiver should parse 8-bit HR value when flags bit0=0."""
+        settings = self._make_settings()
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings, f)
+        f.close()
+        controller = PowerZoneController(f.name)
+        os.unlink(f.name)
+
+        received_hrs = []
+        controller.process_heart_rate_data = lambda h: received_hrs.append(h)
+
+        # flags=0x00 (bit0=0 → 8-bit HR), HR=150
+        data = bytes([0x00, 150])
+        flags = data[0]
+        if flags & 0x01:
+            hr = int.from_bytes(data[1:3], byteorder='little')
+        else:
+            hr = data[1]
+        controller.process_heart_rate_data(hr)
+        self.assertEqual(received_hrs[0], 150)
+
+    def test_parse_hr_16bit(self):
+        """BLEHeartRateReceiver should parse 16-bit HR value when flags bit0=1."""
+        settings = self._make_settings()
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings, f)
+        f.close()
+        controller = PowerZoneController(f.name)
+        os.unlink(f.name)
+
+        received_hrs = []
+        controller.process_heart_rate_data = lambda h: received_hrs.append(h)
+
+        # flags=0x01 (bit0=1 → 16-bit HR), HR=175 in LE
+        data = bytes([0x01, 175, 0x00])
+        flags = data[0]
+        if flags & 0x01:
+            hr = int.from_bytes(data[1:3], byteorder='little')
+        else:
+            hr = data[1]
+        controller.process_heart_rate_data(hr)
+        self.assertEqual(received_hrs[0], 175)
+
+    def test_stop_not_running(self):
+        """Calling stop on a non-running receiver should be safe."""
+        settings = self._make_settings()
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings, f)
+        f.close()
+        controller = PowerZoneController(f.name)
+        os.unlink(f.name)
+
+        receiver = BLEHeartRateReceiver(settings, controller)
+        receiver.stop()  # Should not raise
+
+
+class TestDataSourceManagerConditionalInit(unittest.TestCase):
+    """Test DataSourceManager conditionally starts ANT+/BLE based on sources."""
+
+    def _make_dsm(self, power_source='antplus', hr_source='antplus', hr_enabled=False):
+        from smart_fan_controller import DataSourceManager
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['power_source'] = power_source
+        settings['data_source']['hr_source'] = hr_source
+        settings['heart_rate_zones']['enabled'] = hr_enabled
+
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings, f)
+        f.close()
+        controller = PowerZoneController(f.name)
+        os.unlink(f.name)
+
+        dsm = DataSourceManager(settings, controller)
+        return dsm
+
+    def test_both_antplus_needs_antplus(self):
+        """When both sources are antplus, ANT+ node should be initialized."""
+        dsm = self._make_dsm(power_source='antplus', hr_source='antplus')
+        with patch.object(dsm, '_start_antplus') as mock_ant, \
+             patch.object(dsm, '_monitor_loop'):
+            dsm.start()
+            mock_ant.assert_called_once()
+        dsm.running = False
+
+    def test_both_ble_no_antplus(self):
+        """When both sources are ble, ANT+ should NOT be started."""
+        dsm = self._make_dsm(power_source='ble', hr_source='ble', hr_enabled=True)
+        with patch.object(dsm, '_start_antplus') as mock_ant, \
+             patch('smart_fan_controller.BLEPowerReceiver') as MockPower, \
+             patch('smart_fan_controller.BLEHeartRateReceiver') as MockHR, \
+             patch.object(dsm, '_monitor_loop'):
+            MockPower.return_value = MagicMock(start=MagicMock())
+            MockHR.return_value = MagicMock(start=MagicMock())
+            dsm.start()
+            mock_ant.assert_not_called()
+        dsm.running = False
+
+    def test_power_ble_hr_antplus_starts_antplus(self):
+        """When power=ble, hr=antplus, ANT+ should be started for HR."""
+        dsm = self._make_dsm(power_source='ble', hr_source='antplus', hr_enabled=True)
+        with patch.object(dsm, '_start_antplus') as mock_ant, \
+             patch('smart_fan_controller.BLEPowerReceiver') as MockPower, \
+             patch.object(dsm, '_monitor_loop'):
+            MockPower.return_value = MagicMock(start=MagicMock())
+            dsm.start()
+            mock_ant.assert_called_once()
+        dsm.running = False
+
+    def test_power_antplus_hr_ble_starts_antplus(self):
+        """When power=antplus, hr=ble, ANT+ should be started for power."""
+        dsm = self._make_dsm(power_source='antplus', hr_source='ble', hr_enabled=True)
+        with patch.object(dsm, '_start_antplus') as mock_ant, \
+             patch('smart_fan_controller.BLEHeartRateReceiver') as MockHR, \
+             patch.object(dsm, '_monitor_loop'):
+            MockHR.return_value = MagicMock(start=MagicMock())
+            dsm.start()
+            mock_ant.assert_called_once()
+        dsm.running = False
+
+    def test_init_antplus_node_power_antplus_registers_meter(self):
+        """When power_source=antplus, PowerMeter should be registered."""
+        dsm = self._make_dsm(power_source='antplus', hr_source='antplus')
+        with patch('smart_fan_controller.Node') as MockNode, \
+             patch('smart_fan_controller.PowerMeter') as MockPowerMeter, \
+             patch('smart_fan_controller.HeartRate'):
+            MockNode.return_value = MagicMock()
+            dsm._init_antplus_node()
+            MockPowerMeter.assert_called_once()
+
+    def test_init_antplus_node_power_ble_no_meter(self):
+        """When power_source=ble, PowerMeter should NOT be registered."""
+        dsm = self._make_dsm(power_source='ble', hr_source='antplus')
+        with patch('smart_fan_controller.Node') as MockNode, \
+             patch('smart_fan_controller.PowerMeter') as MockPowerMeter, \
+             patch('smart_fan_controller.HeartRate'):
+            MockNode.return_value = MagicMock()
+            dsm._init_antplus_node()
+            MockPowerMeter.assert_not_called()
+
+    def test_init_antplus_node_hr_enabled_antplus_registers_hr(self):
+        """When hr_source=antplus and HR enabled, HeartRate should be registered."""
+        dsm = self._make_dsm(power_source='antplus', hr_source='antplus', hr_enabled=True)
+        with patch('smart_fan_controller.Node') as MockNode, \
+             patch('smart_fan_controller.PowerMeter'), \
+             patch('smart_fan_controller.HeartRate') as MockHR:
+            MockNode.return_value = MagicMock()
+            dsm._init_antplus_node()
+            MockHR.assert_called_once()
+
+    def test_init_antplus_node_hr_ble_no_hr_monitor(self):
+        """When hr_source=ble, HeartRate monitor should NOT be registered."""
+        dsm = self._make_dsm(power_source='antplus', hr_source='ble', hr_enabled=True)
+        with patch('smart_fan_controller.Node') as MockNode, \
+             patch('smart_fan_controller.PowerMeter'), \
+             patch('smart_fan_controller.HeartRate') as MockHR:
+            MockNode.return_value = MagicMock()
+            dsm._init_antplus_node()
+            MockHR.assert_not_called()
+
+
+class TestPowerZoneControllerHRSourcePrint(unittest.TestCase):
+    """Test that PowerZoneController prints power_source and hr_source on init."""
+
+    def test_prints_power_source_and_hr_source(self):
+        """Controller init should print both power_source and hr_source."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['power_source'] = 'ble'
+        settings['data_source']['hr_source'] = 'antplus'
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings, f)
+        f.close()
+        with patch('builtins.print') as mock_print:
+            controller = PowerZoneController(f.name)
+        os.unlink(f.name)
+        printed = ' '.join(str(c) for c in mock_print.call_args_list)
+        self.assertIn('ble', printed.lower())
+        self.assertIn('antplus', printed.lower())
+
 
 
 if __name__ == '__main__':

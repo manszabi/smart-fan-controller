@@ -52,7 +52,16 @@ DEFAULT_SETTINGS = {
         "pin_code": None           # BLE PIN kód alkalmazás szintű autentikációhoz (null = nincs auth, 0–999999)
     },
     "data_source": {
-        "primary": "antplus",      # Elsődleges adatforrás: "antplus"
+        "power_source": "antplus",           # Power adatforrás: "antplus" vagy "ble"
+        "hr_source": "antplus",              # HR adatforrás: "antplus" vagy "ble"
+        "ble_power_device_name": None,       # BLE power meter neve (szükséges ha power_source: "ble")
+        "ble_power_scan_timeout": 10,        # BLE power keresési időkorlát (s, 1–60)
+        "ble_power_reconnect_interval": 5,   # BLE power újracsatlakozási várakozás (s, 1–60)
+        "ble_power_max_retries": 10,         # BLE power maximális újracsatlakozási kísérletek (1–100)
+        "ble_hr_device_name": None,          # BLE HR eszköz neve (szükséges ha hr_source: "ble")
+        "ble_hr_scan_timeout": 10,           # BLE HR keresési időkorlát (s, 1–60)
+        "ble_hr_reconnect_interval": 5,      # BLE HR újracsatlakozási várakozás (s, 1–60)
+        "ble_hr_max_retries": 10,            # BLE HR maximális újracsatlakozási kísérletek (1–100)
     },
     "heart_rate_zones": {
         "enabled": False,          # True: HR zóna rendszer aktív (befolyásolja a ventilátort)
@@ -530,7 +539,8 @@ class PowerZoneController:
         pin_code = self.settings['ble'].get('pin_code', None)
         if pin_code is not None:
             print(f"BLE PIN: {pin_code}")
-        print(f"HR forrás: antplus")
+        print(f"Power forrás: {self.settings['data_source']['power_source']}")
+        print(f"HR forrás: {self.settings['data_source']['hr_source']}")
         if self.hr_zone_settings.get('enabled', False):
             hr_z = self.hr_zones
             print(f"HR zóna mód: {self.hr_zone_settings.get('zone_mode', 'power_only')}")
@@ -745,12 +755,66 @@ class PowerZoneController:
             if isinstance(loaded_settings['data_source'], dict):
                 ds = loaded_settings['data_source']
 
-                if 'primary' in ds:
-                    if ds['primary'] == 'antplus':
-                        settings['data_source']['primary'] = ds['primary']
+                if 'power_source' in ds:
+                    if ds['power_source'] in ('antplus', 'ble'):
+                        settings['data_source']['power_source'] = ds['power_source']
                     else:
-                        print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'primary' érték: {ds['primary']} ('antplus' kell legyen)")
+                        print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'power_source' érték: {ds['power_source']} ('antplus' vagy 'ble' kell legyen)")
                         validation_failed = True
+
+                if 'hr_source' in ds:
+                    if ds['hr_source'] in ('antplus', 'ble'):
+                        settings['data_source']['hr_source'] = ds['hr_source']
+                    else:
+                        print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'hr_source' érték: {ds['hr_source']} ('antplus' vagy 'ble' kell legyen)")
+                        validation_failed = True
+
+                if 'ble_power_device_name' in ds:
+                    if ds['ble_power_device_name'] is None or (isinstance(ds['ble_power_device_name'], str) and len(ds['ble_power_device_name']) > 0):
+                        settings['data_source']['ble_power_device_name'] = ds['ble_power_device_name']
+                    else:
+                        print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'ble_power_device_name' érték")
+                        validation_failed = True
+
+                if 'ble_hr_device_name' in ds:
+                    if ds['ble_hr_device_name'] is None or (isinstance(ds['ble_hr_device_name'], str) and len(ds['ble_hr_device_name']) > 0):
+                        settings['data_source']['ble_hr_device_name'] = ds['ble_hr_device_name']
+                    else:
+                        print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'ble_hr_device_name' érték")
+                        validation_failed = True
+
+                for field in [
+                    'ble_power_scan_timeout',
+                    'ble_power_reconnect_interval',
+                    'ble_power_max_retries',
+                    'ble_hr_scan_timeout',
+                    'ble_hr_reconnect_interval',
+                    'ble_hr_max_retries',
+                ]:
+                    if field in ds:
+                        max_val = 100 if 'max_retries' in field else 60
+                        if isinstance(ds[field], int) and not isinstance(ds[field], bool) and 1 <= ds[field] <= max_val:
+                            settings['data_source'][field] = ds[field]
+                        else:
+                            print(f"⚠ FIGYELMEZTETÉS: Érvénytelen '{field}' érték: {ds[field]} (1-{max_val} között kell lennie)")
+                            validation_failed = True
+
+                ds_known_keys = {
+                    'power_source', 'hr_source',
+                    'ble_power_device_name', 'ble_power_scan_timeout',
+                    'ble_power_reconnect_interval', 'ble_power_max_retries',
+                    'ble_hr_device_name', 'ble_hr_scan_timeout',
+                    'ble_hr_reconnect_interval', 'ble_hr_max_retries',
+                }
+                ds_unknown = set(ds.keys()) - ds_known_keys
+                if ds_unknown:
+                    print(f"⚠ FIGYELMEZTETÉS: Ismeretlen data_source mező(k): {', '.join(ds_unknown)}")
+
+                # Figyelmeztetés ha BLE forrás van beállítva de nincs eszköznév
+                if settings['data_source']['power_source'] == 'ble' and not settings['data_source'].get('ble_power_device_name'):
+                    print(f"⚠ FIGYELMEZTETÉS: power_source='ble' de 'ble_power_device_name' nincs megadva!")
+                if settings['data_source']['hr_source'] == 'ble' and not settings['data_source'].get('ble_hr_device_name'):
+                    print(f"⚠ FIGYELMEZTETÉS: hr_source='ble' de 'ble_hr_device_name' nincs megadva!")
             else:
                 print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'data_source' formátum")
                 validation_failed = True
@@ -1294,9 +1358,284 @@ class PowerZoneController:
             self.ble.send_command_sync(send_zone)
 
 
+
 # ============================================================
-# DataSourceManager - ANT+ kezelő
+# BLEPowerReceiver
 # ============================================================
+class BLEPowerReceiver:
+    """BLE Cycling Power Service fogadó.
+
+    Standard BLE Cycling Power Service (UUID: 0x1818) segítségével fogadja
+    az azonnali teljesítmény adatokat (Cycling Power Measurement, 0x2A63).
+    Saját háttérszálban fut, notification-ökön kapja az adatot.
+    Teljesen független BLE kapcsolat a BLEController-től.
+
+    Parse: flags (2 byte little-endian) → instantaneous power (2 byte LE, signed int16)
+    """
+
+    CYCLING_POWER_SERVICE_UUID = "00001818-0000-1000-8000-00805f9b34fb"
+    CYCLING_POWER_MEASUREMENT_UUID = "00002a63-0000-1000-8000-00805f9b34fb"
+
+    def __init__(self, settings, controller):
+        """Inicializálja a BLEPowerReceiver-t.
+
+        Paraméterek:
+            settings (dict): A teljes beállítások dict-je.
+            controller (PowerZoneController): A vezérlő példány.
+        """
+        ds = settings['data_source']
+        self.device_name = ds.get('ble_power_device_name')
+        self.scan_timeout = ds.get('ble_power_scan_timeout', 10)
+        self.reconnect_interval = ds.get('ble_power_reconnect_interval', 5)
+        self.max_retries = ds.get('ble_power_max_retries', 10)
+        self.controller = controller
+
+        self.running = False
+        self.is_connected = False
+        self.thread = None
+        self.loop = None
+        self._retry_count = 0
+
+    def start(self):
+        """Elindítja a BLE power fogadó háttérszálat."""
+        if self.running:
+            print("⚠ BLE Power thread már fut!")
+            return
+        self.running = True
+        self.thread = threading.Thread(target=self._run_loop, daemon=True, name="BLEPower-Thread")
+        self.thread.start()
+        print("✓ BLE Power thread elindítva")
+
+    def _run_loop(self):
+        """A BLE power háttérszál fő ciklusa."""
+        try:
+            self.loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self.loop)
+            self.loop.run_until_complete(self._receive_loop())
+        except Exception as e:
+            print(f"✗ BLE Power thread kritikus hiba: {e}")
+        finally:
+            if self.loop:
+                self.loop.close()
+            print("✓ BLE Power thread leállítva")
+
+    async def _receive_loop(self):
+        """BLE power adatfogadás ciklusa újracsatlakozási logikával."""
+        while self.running:
+            try:
+                await self._scan_and_subscribe()
+            except Exception as e:
+                if not self.running:
+                    break
+                self._retry_count += 1
+                print(f"⚠ BLE Power kapcsolat megszakadt ({self._retry_count}/{self.max_retries}): {e}")
+                self.is_connected = False
+                if self._retry_count >= self.max_retries:
+                    print(f"⚠ Max BLE Power újracsatlakozási kísérletek elérve! 30s várakozás...")
+                    await asyncio.sleep(30)
+                    self._retry_count = 0
+                else:
+                    await asyncio.sleep(self.reconnect_interval)
+
+    async def _scan_and_subscribe(self):
+        """BLE power meter keresése, csatlakozás és notification feliratkozás."""
+        if not self.device_name:
+            print("⚠ BLE Power: nincs eszköznév megadva, várakozás...")
+            await asyncio.sleep(self.reconnect_interval)
+            return
+
+        print(f"🔍 BLE Power keresés: {self.device_name}...")
+        devices = await BleakScanner.discover(timeout=self.scan_timeout)
+        device_addr = None
+        for d in devices:
+            if d.name == self.device_name:
+                device_addr = d.address
+                print(f"✓ BLE Power eszköz megtalálva: {d.name} ({d.address})")
+                break
+
+        if not device_addr:
+            print(f"✗ BLE Power eszköz nem található: {self.device_name}")
+            raise Exception(f"Device not found: {self.device_name}")
+
+        async with BleakClient(device_addr) as client:
+            self.is_connected = True
+            self._retry_count = 0
+            print(f"✓ BLE Power csatlakozva: {device_addr}")
+
+            def notification_handler(sender, data):
+                try:
+                    if len(data) < 4:
+                        return
+                    # flags: 2 bytes LE; instantaneous power: 2 bytes LE signed int16
+                    power = int.from_bytes(data[2:4], byteorder='little', signed=True)
+                    self.controller.process_power_data(power)
+                except Exception as e:
+                    print(f"⚠ BLE Power notification parse hiba: {e}")
+
+            await client.start_notify(self.CYCLING_POWER_MEASUREMENT_UUID, notification_handler)
+            while self.running and client.is_connected:
+                await asyncio.sleep(1)
+            await client.stop_notify(self.CYCLING_POWER_MEASUREMENT_UUID)
+
+        self.is_connected = False
+
+    def stop(self):
+        """Leállítja a BLE power háttérszálat."""
+        if not self.running:
+            return
+        print("🛑 BLE Power thread leállítása...")
+        self.running = False
+        if self.loop and self.loop.is_running():
+            self.loop.call_soon_threadsafe(self.loop.stop)
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=5)
+            if self.thread.is_alive():
+                print("⚠ BLE Power thread nem állt le időben")
+            else:
+                print("✓ BLE Power thread leállítva")
+
+
+# ============================================================
+# BLEHeartRateReceiver
+# ============================================================
+class BLEHeartRateReceiver:
+    """BLE Heart Rate Service fogadó.
+
+    Standard BLE Heart Rate Service (UUID: 0x180D) segítségével fogadja
+    a szívfrekvencia adatokat (Heart Rate Measurement, 0x2A37).
+    Saját háttérszálban fut, notification-ökön kapja az adatot.
+    Teljesen független BLE kapcsolat a BLEController-től.
+
+    Parse: flags byte → 8-bit vagy 16-bit HR érték
+    """
+
+    HEART_RATE_SERVICE_UUID = "0000180d-0000-1000-8000-00805f9b34fb"
+    HEART_RATE_MEASUREMENT_UUID = "00002a37-0000-1000-8000-00805f9b34fb"
+
+    def __init__(self, settings, controller):
+        """Inicializálja a BLEHeartRateReceiver-t.
+
+        Paraméterek:
+            settings (dict): A teljes beállítások dict-je.
+            controller (PowerZoneController): A vezérlő példány.
+        """
+        ds = settings['data_source']
+        self.device_name = ds.get('ble_hr_device_name')
+        self.scan_timeout = ds.get('ble_hr_scan_timeout', 10)
+        self.reconnect_interval = ds.get('ble_hr_reconnect_interval', 5)
+        self.max_retries = ds.get('ble_hr_max_retries', 10)
+        self.controller = controller
+
+        self.running = False
+        self.is_connected = False
+        self.thread = None
+        self.loop = None
+        self._retry_count = 0
+
+    def start(self):
+        """Elindítja a BLE HR fogadó háttérszálat."""
+        if self.running:
+            print("⚠ BLE HR thread már fut!")
+            return
+        self.running = True
+        self.thread = threading.Thread(target=self._run_loop, daemon=True, name="BLEHR-Thread")
+        self.thread.start()
+        print("✓ BLE HR thread elindítva")
+
+    def _run_loop(self):
+        """A BLE HR háttérszál fő ciklusa."""
+        try:
+            self.loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self.loop)
+            self.loop.run_until_complete(self._receive_loop())
+        except Exception as e:
+            print(f"✗ BLE HR thread kritikus hiba: {e}")
+        finally:
+            if self.loop:
+                self.loop.close()
+            print("✓ BLE HR thread leállítva")
+
+    async def _receive_loop(self):
+        """BLE HR adatfogadás ciklusa újracsatlakozási logikával."""
+        while self.running:
+            try:
+                await self._scan_and_subscribe()
+            except Exception as e:
+                if not self.running:
+                    break
+                self._retry_count += 1
+                print(f"⚠ BLE HR kapcsolat megszakadt ({self._retry_count}/{self.max_retries}): {e}")
+                self.is_connected = False
+                if self._retry_count >= self.max_retries:
+                    print(f"⚠ Max BLE HR újracsatlakozási kísérletek elérve! 30s várakozás...")
+                    await asyncio.sleep(30)
+                    self._retry_count = 0
+                else:
+                    await asyncio.sleep(self.reconnect_interval)
+
+    async def _scan_and_subscribe(self):
+        """BLE HR eszköz keresése, csatlakozás és notification feliratkozás."""
+        if not self.device_name:
+            print("⚠ BLE HR: nincs eszköznév megadva, várakozás...")
+            await asyncio.sleep(self.reconnect_interval)
+            return
+
+        print(f"🔍 BLE HR keresés: {self.device_name}...")
+        devices = await BleakScanner.discover(timeout=self.scan_timeout)
+        device_addr = None
+        for d in devices:
+            if d.name == self.device_name:
+                device_addr = d.address
+                print(f"✓ BLE HR eszköz megtalálva: {d.name} ({d.address})")
+                break
+
+        if not device_addr:
+            print(f"✗ BLE HR eszköz nem található: {self.device_name}")
+            raise Exception(f"Device not found: {self.device_name}")
+
+        async with BleakClient(device_addr) as client:
+            self.is_connected = True
+            self._retry_count = 0
+            print(f"✓ BLE HR csatlakozva: {device_addr}")
+
+            def notification_handler(sender, data):
+                try:
+                    if len(data) < 2:
+                        return
+                    flags = data[0]
+                    # bit 0 of flags: 0 = 8-bit HR value, 1 = 16-bit HR value
+                    if flags & 0x01:
+                        hr = int.from_bytes(data[1:3], byteorder='little')
+                    else:
+                        hr = data[1]
+                    self.controller.process_heart_rate_data(hr)
+                except Exception as e:
+                    print(f"⚠ BLE HR notification parse hiba: {e}")
+
+            await client.start_notify(self.HEART_RATE_MEASUREMENT_UUID, notification_handler)
+            while self.running and client.is_connected:
+                await asyncio.sleep(1)
+            await client.stop_notify(self.HEART_RATE_MEASUREMENT_UUID)
+
+        self.is_connected = False
+
+    def stop(self):
+        """Leállítja a BLE HR háttérszálat."""
+        if not self.running:
+            return
+        print("🛑 BLE HR thread leállítása...")
+        self.running = False
+        if self.loop and self.loop.is_running():
+            self.loop.call_soon_threadsafe(self.loop.stop)
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=5)
+            if self.thread.is_alive():
+                print("⚠ BLE HR thread nem állt le időben")
+            else:
+                print("✓ BLE HR thread leállítva")
+
+
+
 class DataSourceManager:
     """ANT+ adatforrás kezelője.
 
@@ -1325,6 +1664,9 @@ class DataSourceManager:
         self.antplus_node = None
         self.antplus_devices = []
         self.antplus_last_data = 0
+
+        self.ble_power_receiver = None
+        self.ble_hr_receiver = None
 
         self.running = False
         self.monitor_thread = None
@@ -1370,17 +1712,21 @@ class DataSourceManager:
     def _init_antplus_node(self):
         """Inicializálja az ANT+ node-ot és regisztrálja az eszközöket.
 
-        Mindig létrehoz egy PowerMeter-t. Ha a heart_rate_zones engedélyezett,
-        egy HeartRate monitort is regisztrál.
+        PowerMeter csak akkor regisztrálódik, ha power_source == 'antplus'.
+        HeartRate monitor csak akkor regisztrálódik, ha hr_source == 'antplus'
+        ÉS heart_rate_zones engedélyezett.
         """
         self.antplus_node = Node()
         self.antplus_node.set_network_key(0x00, ANTPLUS_NETWORK_KEY)
 
         self.antplus_devices = []
-        meter = PowerMeter(self.antplus_node)
-        self._register_antplus_device(meter)
 
-        if self.settings.get('heart_rate_zones', {}).get('enabled', False):
+        if self.ds_settings.get('power_source', 'antplus') == 'antplus':
+            meter = PowerMeter(self.antplus_node)
+            self._register_antplus_device(meter)
+
+        if (self.ds_settings.get('hr_source', 'antplus') == 'antplus' and
+                self.settings.get('heart_rate_zones', {}).get('enabled', False)):
             hr_monitor = HeartRate(self.antplus_node)
             self._register_antplus_device(hr_monitor)
 
@@ -1531,22 +1877,50 @@ class DataSourceManager:
             )
 
             if current_time - last_source_print >= 30:
-                print(f"📡 Adatforrás státusz | "
-                      f"ANT+: {'✓' if antplus_has_data else '✗'}")
+                parts = []
+                power_source = self.ds_settings.get('power_source', 'antplus')
+                hr_source = self.ds_settings.get('hr_source', 'antplus')
+
+                if power_source == 'antplus' or hr_source == 'antplus':
+                    parts.append(f"ANT+: {'✓' if antplus_has_data else '✗'}")
+                if power_source == 'ble':
+                    ble_power_ok = self.ble_power_receiver is not None and self.ble_power_receiver.is_connected
+                    parts.append(f"BLE Power: {'✓' if ble_power_ok else '✗'}")
+                if hr_source == 'ble':
+                    ble_hr_ok = self.ble_hr_receiver is not None and self.ble_hr_receiver.is_connected
+                    parts.append(f"BLE HR: {'✓' if ble_hr_ok else '✗'}")
+
+                print(f"📡 Adatforrás státusz | {' | '.join(parts)}")
                 last_source_print = current_time
 
     def start(self):
-        """Elindítja az ANT+ adatforrást és a monitor szálat.
+        """Elindítja az adatforrás(oka)t és a monitor szálat.
 
         Indítási sorend:
-            1. ANT+ szál
-            2. Adatforrás monitor szál
+            1. BLE Power fogadó (ha power_source == 'ble')
+            2. BLE HR fogadó (ha hr_source == 'ble' és HR engedélyezett)
+            3. ANT+ szál (ha legalább az egyik forrás 'antplus')
+            4. Adatforrás monitor szál
         """
         self.running = True
 
-        print(f"📡 Adatforrás: ANTPLUS")
+        power_source = self.ds_settings.get('power_source', 'antplus')
+        hr_source = self.ds_settings.get('hr_source', 'antplus')
+        hr_enabled = self.settings.get('heart_rate_zones', {}).get('enabled', False)
 
-        self._start_antplus()
+        print(f"📡 Power forrás: {power_source.upper()} | HR forrás: {hr_source.upper()}")
+
+        if power_source == 'ble':
+            self.ble_power_receiver = BLEPowerReceiver(self.settings, self.controller)
+            self.ble_power_receiver.start()
+
+        if hr_source == 'ble' and hr_enabled:
+            self.ble_hr_receiver = BLEHeartRateReceiver(self.settings, self.controller)
+            self.ble_hr_receiver.start()
+
+        needs_antplus = (power_source == 'antplus') or (hr_source == 'antplus' and hr_enabled)
+        if needs_antplus:
+            self._start_antplus()
 
         self.monitor_thread = threading.Thread(
             target=self._monitor_loop,
@@ -1557,8 +1931,20 @@ class DataSourceManager:
         print("✓ Adatforrás monitor elindítva")
 
     def stop(self):
-        """Leállítja az ANT+ adatforrást."""
+        """Leállítja az összes adatforrást."""
         self.running = False
+
+        if self.ble_power_receiver:
+            try:
+                self.ble_power_receiver.stop()
+            except Exception as e:
+                print(f"BLE Power leállítási hiba: {e}")
+
+        if self.ble_hr_receiver:
+            try:
+                self.ble_hr_receiver.stop()
+            except Exception as e:
+                print(f"BLE HR leállítási hiba: {e}")
 
         try:
             self._stop_antplus_node()
@@ -1603,7 +1989,7 @@ def main():
     logging.getLogger('openant').setLevel(logging.CRITICAL)
 
     print("=" * 60)
-    print(f"  Smart Fan Controller v{__version__} - ANT+ Power Meter → BLE Fan Control")
+    print(f"  Smart Fan Controller v{__version__} - Power/HR → BLE Fan Control")
     print("=" * 60)
     print()
 

@@ -23,7 +23,16 @@
     "pin_code": null
   },
   "data_source": {
-    "primary": "antplus"
+    "power_source": "antplus",
+    "hr_source": "antplus",
+    "ble_power_device_name": null,
+    "ble_power_scan_timeout": 10,
+    "ble_power_reconnect_interval": 5,
+    "ble_power_max_retries": 10,
+    "ble_hr_device_name": null,
+    "ble_hr_scan_timeout": 10,
+    "ble_hr_reconnect_interval": 5,
+    "ble_hr_max_retries": 10
   },
   "heart_rate_zones": {
     "enabled": false,
