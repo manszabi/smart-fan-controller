@@ -272,6 +272,7 @@ class BLEController:
         print("⚠ BLE kapcsolat váratlanul megszakadt")
         with self._state_lock:
             self.is_connected = False
+            self.last_sent_command = None
 
     async def _disconnect_async(self):
         """Bontja a BLE kapcsolatot és felszabadítja a klienst."""
@@ -1229,11 +1230,12 @@ class PowerZoneController:
                     self.last_hr_zone_print_time = current_time
                 return
 
-            print(f"❤ HR: {avg_hr} bpm | HR zóna: {new_hr_zone}")
 
             if zone_mode == 'hr_only':
+                print(f"Átlag pulzus: {avg_hr} bpm | Pulzus zóna: {new_hr_zone}")
                 target_zone = new_hr_zone
             else:  # higher_wins
+                print(f"❤ HR: {avg_hr} bpm | HR zóna: {new_hr_zone}")
                 if self.current_power_zone is not None:
                     target_zone = max(self.current_power_zone, new_hr_zone)
                     print(f"🏆 Nyertes zóna: {target_zone} (power: {self.current_power_zone}, hr: {new_hr_zone})")
@@ -1351,23 +1353,32 @@ class DataSourceManager:
         Visszaad:
             bool: True, ha az indítás sikeres; False egyébként.
         """
-        try:
-            self._init_antplus_node()
+        max_init_retries = 3
+        init_retry_delay = 2
 
-            ant_thread = threading.Thread(
-                target=self._antplus_loop,
-                daemon=True,
-                name="ANT+-Thread"
-            )
-            self.antplus_thread = ant_thread
-            ant_thread.start()
-            print("✓ ANT+ figyelés elindítva")
-            return True
+        for attempt in range(1, max_init_retries + 1):
+            try:
+                self._init_antplus_node()
 
-        except Exception as e:
-            print(f"✗ ANT+ indítási hiba: {e}")
-            self.antplus_node = None
-            return False
+                ant_thread = threading.Thread(
+                    target=self._antplus_loop,
+                    daemon=True,
+                    name="ANT+-Thread"
+                )
+                self.antplus_thread = ant_thread
+                ant_thread.start()
+                print("✓ ANT+ figyelés elindítva")
+                return True
+
+            except Exception as e:
+                print(f"⚠ ANT+ inicializálás sikertelen ({attempt}/{max_init_retries}): {e}")
+                self.antplus_node = None
+                if attempt < max_init_retries:
+                    print(f"🔄 Újrapróbálkozás {init_retry_delay}s múlva...")
+                    time.sleep(init_retry_delay)
+
+        print("✗ ANT+ indítás sikertelen minden kísérlet után")
+        return False
 
     def _antplus_loop(self):
         """Az ANT+ háttérszál fő ciklusa – újracsatlakozási logikával.
@@ -1427,6 +1438,7 @@ class DataSourceManager:
 
                 try:
                     self._stop_antplus_node()
+                    time.sleep(1)  # USB erőforrás felszabadulásra várakozás
                     self._init_antplus_node()
                     print("✓ ANT+ node újrainicializálva, újrapróbálkozás...")
                 except Exception as re:

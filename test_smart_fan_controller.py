@@ -1784,5 +1784,237 @@ class TestHigherWinsMissingData(unittest.TestCase):
         self.assertTrue(any('Nyertes zóna' in s for s in printed_args))
 
 
+class TestStartAntplusRetry(unittest.TestCase):
+    """_start_antplus() must retry _init_antplus_node() up to 3 times on failure."""
+
+    def _make_dsm(self):
+        from smart_fan_controller import DataSourceManager
+        dsm = DataSourceManager.__new__(DataSourceManager)
+        dsm.antplus_node = None
+        dsm.antplus_thread = None
+        return dsm
+
+    def test_start_antplus_succeeds_on_first_attempt(self):
+        """If _init_antplus_node() succeeds immediately, returns True."""
+        dsm = self._make_dsm()
+        dsm._init_antplus_node = MagicMock()
+        dsm._antplus_loop = MagicMock()
+        with patch('smart_fan_controller.threading.Thread') as MockThread:
+            mock_thread = MagicMock()
+            MockThread.return_value = mock_thread
+            result = dsm._start_antplus()
+        self.assertTrue(result)
+        self.assertEqual(dsm._init_antplus_node.call_count, 1)
+
+    def test_start_antplus_retries_on_failure(self):
+        """If _init_antplus_node() fails twice then succeeds, returns True after 3rd attempt."""
+        dsm = self._make_dsm()
+        call_count = [0]
+
+        def init_side_effect():
+            call_count[0] += 1
+            if call_count[0] < 3:
+                raise Exception("libusb error")
+
+        dsm._init_antplus_node = init_side_effect
+        dsm._antplus_loop = MagicMock()
+        with patch('smart_fan_controller.time') as mock_time, \
+             patch('smart_fan_controller.threading.Thread') as MockThread:
+            mock_time.sleep = MagicMock()
+            mock_time.time = time.time
+            MockThread.return_value = MagicMock()
+            result = dsm._start_antplus()
+        self.assertTrue(result)
+        self.assertEqual(call_count[0], 3)
+        # Should have slept twice (between attempts 1→2 and 2→3), each for 2s
+        sleep_calls = [c.args[0] for c in mock_time.sleep.call_args_list]
+        self.assertEqual(sleep_calls.count(2), 2)
+
+    def test_start_antplus_succeeds_on_second_attempt(self):
+        """If _init_antplus_node() fails on first attempt then succeeds, returns True."""
+        dsm = self._make_dsm()
+        call_count = [0]
+
+        def init_side_effect():
+            call_count[0] += 1
+            if call_count[0] < 2:
+                raise Exception("libusb error")
+
+        dsm._init_antplus_node = init_side_effect
+        dsm._antplus_loop = MagicMock()
+        with patch('smart_fan_controller.time') as mock_time, \
+             patch('smart_fan_controller.threading.Thread') as MockThread:
+            mock_time.sleep = MagicMock()
+            mock_time.time = time.time
+            MockThread.return_value = MagicMock()
+            result = dsm._start_antplus()
+        self.assertTrue(result)
+        self.assertEqual(call_count[0], 2)
+        # Should have slept once (between attempt 1 and 2) for 2s
+        sleep_calls = [c.args[0] for c in mock_time.sleep.call_args_list]
+        self.assertEqual(sleep_calls.count(2), 1)
+
+    def test_start_antplus_returns_false_after_all_retries_fail(self):
+        """If all 3 attempts fail, returns False."""
+        dsm = self._make_dsm()
+        dsm._init_antplus_node = MagicMock(side_effect=Exception("libusb error"))
+        with patch('smart_fan_controller.time') as mock_time:
+            mock_time.sleep = MagicMock()
+            mock_time.time = time.time
+            result = dsm._start_antplus()
+        self.assertFalse(result)
+        self.assertEqual(dsm._init_antplus_node.call_count, 3)
+
+    def test_start_antplus_sets_node_none_on_failure(self):
+        """After all retries fail, antplus_node is set to None."""
+        dsm = self._make_dsm()
+        dsm._init_antplus_node = MagicMock(side_effect=Exception("libusb error"))
+        with patch('smart_fan_controller.time') as mock_time:
+            mock_time.sleep = MagicMock()
+            mock_time.time = time.time
+            dsm._start_antplus()
+        self.assertIsNone(dsm.antplus_node)
+
+    def test_start_antplus_no_sleep_after_last_attempt(self):
+        """After the last failed attempt, no sleep should be called (only 2 sleeps for 3 attempts)."""
+        dsm = self._make_dsm()
+        dsm._init_antplus_node = MagicMock(side_effect=Exception("libusb error"))
+        with patch('smart_fan_controller.time') as mock_time:
+            mock_time.sleep = MagicMock()
+            mock_time.time = time.time
+            dsm._start_antplus()
+        # Only 2 sleeps between 3 attempts, not after the last
+        self.assertEqual(mock_time.sleep.call_count, 2)
+
+
+class TestOnDisconnectResetsLastSentCommand(unittest.TestCase):
+    """_on_disconnect() must reset last_sent_command to None."""
+
+    def _make_ble(self):
+        ble = BLEController.__new__(BLEController)
+        ble._state_lock = threading.Lock()
+        ble.is_connected = True
+        ble.last_sent_command = 3
+        return ble
+
+    def test_on_disconnect_resets_last_sent_command(self):
+        """last_sent_command must be None after _on_disconnect."""
+        ble = self._make_ble()
+        ble._on_disconnect(None)
+        self.assertIsNone(ble.last_sent_command)
+
+    def test_on_disconnect_sets_is_connected_false(self):
+        """is_connected must be False after _on_disconnect."""
+        ble = self._make_ble()
+        ble._on_disconnect(None)
+        self.assertFalse(ble.is_connected)
+
+
+class TestAntplusLoopSleepBeforeReinit(unittest.TestCase):
+    """_antplus_loop must sleep 1s between _stop_antplus_node and _init_antplus_node."""
+
+    def test_sleep_between_stop_and_reinit(self):
+        """After exception, sleep(1) must be called before _init_antplus_node."""
+        from smart_fan_controller import DataSourceManager
+
+        with patch('smart_fan_controller.time') as mock_time:
+            mock_time.sleep = MagicMock()
+            mock_time.time = time.time
+
+            dsm = DataSourceManager.__new__(DataSourceManager)
+            dsm.running = True
+            dsm.antplus_node = MagicMock()
+            dsm.antplus_last_data = 0
+            dsm.ANTPLUS_MAX_RETRIES = 3
+            dsm.ANTPLUS_RECONNECT_DELAY = 0
+
+            call_order = []
+
+            def stop_side():
+                call_order.append('stop')
+
+            def init_side():
+                call_order.append('init')
+                dsm.running = False
+
+            dsm._stop_antplus_node = stop_side
+            dsm._init_antplus_node = init_side
+
+            def start_side():
+                raise Exception("simulated error")
+
+            dsm.antplus_node.start = start_side
+
+            dsm._antplus_loop()
+
+        # sleep(1) must appear between stop and init
+        sleep_calls = [c.args[0] for c in mock_time.sleep.call_args_list]
+        self.assertIn(1, sleep_calls)
+        # stop must come before init
+        self.assertLess(call_order.index('stop'), call_order.index('init'))
+
+
+class TestHROnlyPrintFormat(unittest.TestCase):
+    """hr_only mode must print 'Átlag pulzus' format; higher_wins keeps '❤ HR' format."""
+
+    def _make_controller(self, zone_mode):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['minimum_samples'] = 1
+        settings['buffer_seconds'] = 1
+        settings['heart_rate_zones'] = {
+            'enabled': True,
+            'max_hr': 185,
+            'resting_hr': 60,
+            'zone_mode': zone_mode,
+            'z1_max_percent': 70,
+            'z2_max_percent': 80,
+        }
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings, f, indent=2)
+        f.close()
+        self._tmp = f.name
+        controller = PowerZoneController(f.name)
+        controller.ble.running = True
+        controller.ble.send_command_sync = MagicMock()
+        return controller
+
+    def tearDown(self):
+        if hasattr(self, '_tmp') and os.path.exists(self._tmp):
+            os.unlink(self._tmp)
+
+    def test_hr_only_prints_avg_pulzus_format(self):
+        """In hr_only mode, must print 'Átlag pulzus: X bpm | Pulzus zóna: Y'."""
+        controller = self._make_controller('hr_only')
+        with patch('builtins.print') as mock_print:
+            controller.process_heart_rate_data(175)
+        printed_args = [str(c) for c in mock_print.call_args_list]
+        self.assertTrue(any('Átlag pulzus' in s for s in printed_args))
+        self.assertTrue(any('Pulzus zóna' in s for s in printed_args))
+
+    def test_hr_only_does_not_print_heart_emoji_format(self):
+        """In hr_only mode, must NOT print '❤ HR: ...' format."""
+        controller = self._make_controller('hr_only')
+        with patch('builtins.print') as mock_print:
+            controller.process_heart_rate_data(175)
+        printed_args = [str(c) for c in mock_print.call_args_list]
+        self.assertFalse(any('❤ HR' in s for s in printed_args))
+
+    def test_higher_wins_prints_heart_emoji_format(self):
+        """In higher_wins mode, must print '❤ HR: ...' format."""
+        controller = self._make_controller('higher_wins')
+        with patch('builtins.print') as mock_print:
+            controller.process_heart_rate_data(175)
+        printed_args = [str(c) for c in mock_print.call_args_list]
+        self.assertTrue(any('❤ HR' in s for s in printed_args))
+
+    def test_higher_wins_does_not_print_avg_pulzus_format(self):
+        """In higher_wins mode, must NOT print 'Átlag pulzus' format."""
+        controller = self._make_controller('higher_wins')
+        with patch('builtins.print') as mock_print:
+            controller.process_heart_rate_data(175)
+        printed_args = [str(c) for c in mock_print.call_args_list]
+        self.assertFalse(any('Átlag pulzus' in s for s in printed_args))
+
+
 if __name__ == '__main__':
     unittest.main()
