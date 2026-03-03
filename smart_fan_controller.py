@@ -1166,7 +1166,7 @@ class PowerZoneController:
                 print(f"📊 Adatok gyűjtése: {len(self.power_buffer)}/{self.minimum_samples}")
                 return
 
-            avg_power = sum(self.power_buffer) // len(self.power_buffer)
+            avg_power = round(sum(self.power_buffer) / len(self.power_buffer))
             new_power_zone = self.get_zone_for_power(avg_power)
             self.current_power_zone = new_power_zone
             self.current_avg_power = avg_power
@@ -1250,7 +1250,7 @@ class PowerZoneController:
 
             if len(self.hr_buffer) < self.minimum_samples:
                 return
-            avg_hr = sum(self.hr_buffer) // len(self.hr_buffer)
+            avg_hr = round(sum(self.hr_buffer) / len(self.hr_buffer))
             new_hr_zone = self.get_hr_zone(avg_hr)
             self.current_hr_zone = new_hr_zone
 
