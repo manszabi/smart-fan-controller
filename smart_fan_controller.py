@@ -511,6 +511,7 @@ class PowerZoneController:
         self.last_hr_print_time = 0
         self.last_power_print_time = 0
         self.last_hr_zone_print_time = 0
+        self.last_hr_data_time = None
 
         self.ble = BLEController(self.settings)
 
@@ -1143,12 +1144,14 @@ class PowerZoneController:
 
             # power_only és higher_wins módban a bejövő adat kiírása (throttle-ölve)
             zone_mode = self.hr_zone_settings.get('zone_mode', 'power_only') if self.hr_zone_settings.get('enabled', False) else 'power_only'
+            hr_is_fresh = (self.last_hr_data_time is not None and
+                           time.time() - self.last_hr_data_time < self.dropout_timeout)
 
             if zone_mode != 'hr_only':
                 current_time = time.time()
                 if current_time - self.last_power_print_time >= 1.0:
                     if zone_mode == 'higher_wins':
-                        if self.current_heart_rate is not None:
+                        if self.current_heart_rate is not None and hr_is_fresh:
                             print(f"❤ HR: {self.current_heart_rate} bpm | ⚡ Teljesítmény: {power} watt")
                         else:
                             print(f"⚡ Teljesítmény: {power} watt")
@@ -1177,7 +1180,7 @@ class PowerZoneController:
 
             print(f"⚡ Átlag teljesítmény: {avg_power} watt | Power zóna: {new_power_zone}")
 
-            if zone_mode == 'higher_wins' and self.current_hr_zone is not None:
+            if zone_mode == 'higher_wins' and self.current_hr_zone is not None and hr_is_fresh:
                 new_zone = max(new_power_zone, self.current_hr_zone)
             else:
                 new_zone = new_power_zone
@@ -1218,6 +1221,7 @@ class PowerZoneController:
 
         with self.state_lock:
             self.current_heart_rate = hr
+            self.last_hr_data_time = time.time()
 
             # hr_only módban az HR adat is frissítse a last_data_time-ot,
             # különben a dropout checker Z0-ra kapcsol
@@ -1264,7 +1268,9 @@ class PowerZoneController:
                 print(f"❤ Átlag HR: {avg_hr} bpm | HR zóna: {new_hr_zone}")
                 target_zone = new_hr_zone
             else:  # higher_wins
-                if self.current_power_zone is not None and self.current_avg_power is not None:
+                power_is_fresh = (self.last_data_time is not None and
+                                  time.time() - self.last_data_time < self.dropout_timeout)
+                if self.current_power_zone is not None and self.current_avg_power is not None and power_is_fresh:
                     avg_power = self.current_avg_power
                     power_zone = self.current_power_zone
                     target_zone = max(power_zone, new_hr_zone)
