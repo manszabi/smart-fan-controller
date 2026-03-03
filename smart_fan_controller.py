@@ -1696,6 +1696,7 @@ class DataSourceManager:
 
     ANTPLUS_RECONNECT_DELAY = 5
     ANTPLUS_MAX_RETRIES = 10
+    ANTPLUS_MAX_RETRY_COOLDOWN = 30    # ← ÚJ
 
     def __init__(self, settings, controller):
         """Inicializálja a DataSourceManager-t.
@@ -1836,8 +1837,8 @@ class DataSourceManager:
                 self.antplus_last_data = 0
 
                 if retry_count >= self.ANTPLUS_MAX_RETRIES:
-                    logger.warning(f"Max ANT+ újracsatlakozási kísérletek elérve ({self.ANTPLUS_MAX_RETRIES})! 30s múlva újrapróbálkozik...")
-                    time.sleep(30)
+                    logger.warning(f"Max ANT+ újracsatlakozási kísérletek elérve ({self.ANTPLUS_MAX_RETRIES})! {self.ANTPLUS_MAX_RETRY_COOLDOWN}s múlva újrapróbálkozik...")
+                    time.sleep(self.ANTPLUS_MAX_RETRY_COOLDOWN)
                     if not self.running:
                         break
                     logger.info("ANT+ retry count reset, újrapróbálkozás...")
@@ -1863,8 +1864,8 @@ class DataSourceManager:
                 self.antplus_last_data = 0
 
                 if retry_count >= self.ANTPLUS_MAX_RETRIES:
-                    logger.warning(f"Max ANT+ újracsatlakozási kísérletek elérve ({self.ANTPLUS_MAX_RETRIES})! 30s múlva újrapróbálkozik...")
-                    time.sleep(30)
+                    logger.warning(f"Max ANT+ újracsatlakozási kísérletek elérve ({self.ANTPLUS_MAX_RETRIES})! {self.ANTPLUS_MAX_RETRY_COOLDOWN}s múlva újrapróbálkozik...")
+                    time.sleep(self.ANTPLUS_MAX_RETRY_COOLDOWN))
                     if not self.running:
                         break
                     logger.info("ANT+ retry count reset, újrapróbálkozás...")
