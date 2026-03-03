@@ -783,20 +783,20 @@ class PowerZoneController:
                         print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'ble_hr_device_name' érték")
                         validation_failed = True
 
-                for field, label in [
-                    ('ble_power_scan_timeout', 'ble_power_scan_timeout'),
-                    ('ble_power_reconnect_interval', 'ble_power_reconnect_interval'),
-                    ('ble_power_max_retries', 'ble_power_max_retries'),
-                    ('ble_hr_scan_timeout', 'ble_hr_scan_timeout'),
-                    ('ble_hr_reconnect_interval', 'ble_hr_reconnect_interval'),
-                    ('ble_hr_max_retries', 'ble_hr_max_retries'),
+                for field in [
+                    'ble_power_scan_timeout',
+                    'ble_power_reconnect_interval',
+                    'ble_power_max_retries',
+                    'ble_hr_scan_timeout',
+                    'ble_hr_reconnect_interval',
+                    'ble_hr_max_retries',
                 ]:
                     if field in ds:
                         max_val = 100 if 'max_retries' in field else 60
                         if isinstance(ds[field], int) and not isinstance(ds[field], bool) and 1 <= ds[field] <= max_val:
                             settings['data_source'][field] = ds[field]
                         else:
-                            print(f"⚠ FIGYELMEZTETÉS: Érvénytelen '{label}' érték: {ds[field]} (1-{max_val} között kell lennie)")
+                            print(f"⚠ FIGYELMEZTETÉS: Érvénytelen '{field}' érték: {ds[field]} (1-{max_val} között kell lennie)")
                             validation_failed = True
 
                 ds_known_keys = {
@@ -1395,7 +1395,6 @@ class BLEPowerReceiver:
         self.thread = None
         self.loop = None
         self._retry_count = 0
-        self._retry_reset_time = None
 
     def start(self):
         """Elindítja a BLE power fogadó háttérszálat."""
@@ -1470,8 +1469,8 @@ class BLEPowerReceiver:
                     # flags: 2 bytes LE; instantaneous power: 2 bytes LE signed int16
                     power = int.from_bytes(data[2:4], byteorder='little', signed=True)
                     self.controller.process_power_data(power)
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"⚠ BLE Power notification parse hiba: {e}")
 
             await client.start_notify(self.CYCLING_POWER_MEASUREMENT_UUID, notification_handler)
             while self.running and client.is_connected:
@@ -1610,8 +1609,8 @@ class BLEHeartRateReceiver:
                     else:
                         hr = data[1]
                     self.controller.process_heart_rate_data(hr)
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"⚠ BLE HR notification parse hiba: {e}")
 
             await client.start_notify(self.HEART_RATE_MEASUREMENT_UUID, notification_handler)
             while self.running and client.is_connected:
