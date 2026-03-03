@@ -134,8 +134,9 @@
 
     // BLE PIN kód alkalmazás szintű autentikációhoz. Ha null, nem történik autentikáció.
     // Csak akkor szükséges, ha az ESP32 firmware PIN kódot igényel.
-    // A PIN a logokban maszkolt formátumban jelenik meg (pl. ****56).
-    // Érvényes értékek: null, vagy 0–999999 közötti egész szám
+    // A PIN-nek pontosan meg kell egyeznie az ESP32-n beállított BLE_AUTH_PIN értékkel.
+    // Megadható egész számként (pl. 123456) vagy szövegként (pl. "007" – leading zerók megőrzése).
+    // Érvényes értékek: null, 0–999999 egész szám, vagy számjegyekből álló szöveg (max 20 karakter)
     // Alapértelmezett: null
     "pin_code": null
   },

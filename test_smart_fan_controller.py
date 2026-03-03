@@ -716,7 +716,7 @@ class TestBLEPINSettings(unittest.TestCase):
         settings['ble']['pin_code'] = 123456
         self._settings_file = self._create_settings_file(settings)
         controller = PowerZoneController(self._settings_file)
-        self.assertEqual(controller.settings['ble']['pin_code'], 123456)
+        self.assertEqual(controller.settings['ble']['pin_code'], "123456")
 
     def test_pin_code_zero(self):
         """pin_code of 0 should be accepted."""
@@ -724,7 +724,7 @@ class TestBLEPINSettings(unittest.TestCase):
         settings['ble']['pin_code'] = 0
         self._settings_file = self._create_settings_file(settings)
         controller = PowerZoneController(self._settings_file)
-        self.assertEqual(controller.settings['ble']['pin_code'], 0)
+        self.assertEqual(controller.settings['ble']['pin_code'], "0")
 
     def test_pin_code_max(self):
         """pin_code of 999999 should be accepted."""
@@ -732,7 +732,7 @@ class TestBLEPINSettings(unittest.TestCase):
         settings['ble']['pin_code'] = 999999
         self._settings_file = self._create_settings_file(settings)
         controller = PowerZoneController(self._settings_file)
-        self.assertEqual(controller.settings['ble']['pin_code'], 999999)
+        self.assertEqual(controller.settings['ble']['pin_code'], "999999")
 
     def test_pin_code_null(self):
         """pin_code of null (None) should be accepted."""
@@ -767,11 +767,11 @@ class TestBLEPINSettings(unittest.TestCase):
         self.assertIsNone(controller.settings['ble']['pin_code'])
 
     def test_ble_controller_stores_pin_code(self):
-        """BLEController should store pin_code from settings."""
+        """BLEController should store string pin_code from settings."""
         settings = copy.deepcopy(DEFAULT_SETTINGS)
-        settings['ble']['pin_code'] = 123456
+        settings['ble']['pin_code'] = "123456"
         ble = BLEController(settings)
-        self.assertEqual(ble.pin_code, 123456)
+        self.assertEqual(ble.pin_code, "123456")
 
     def test_ble_controller_none_pin_code(self):
         """BLEController should store None pin_code."""
@@ -779,6 +779,62 @@ class TestBLEPINSettings(unittest.TestCase):
         settings['ble']['pin_code'] = None
         ble = BLEController(settings)
         self.assertIsNone(ble.pin_code)
+
+    def test_pin_code_string(self):
+        """String pin_code should be accepted and stored as string."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['pin_code'] = "123456"
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['ble']['pin_code'], "123456")
+
+    def test_pin_code_string_leading_zero(self):
+        """String pin_code with leading zeros should be preserved."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['pin_code'] = "007"
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['ble']['pin_code'], "007")
+
+    def test_pin_code_int_converted_to_string(self):
+        """Integer pin_code should be converted to string."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['pin_code'] = 123456
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['ble']['pin_code'], "123456")
+        self.assertIsInstance(controller.settings['ble']['pin_code'], str)
+
+    def test_pin_code_int_zero_converted_to_string(self):
+        """Integer pin_code 0 should be converted to string "0"."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['pin_code'] = 0
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['ble']['pin_code'], "0")
+
+    def test_invalid_pin_code_string_non_digit(self):
+        """Non-digit string pin_code should be rejected."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['pin_code'] = "abc123"
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertIsNone(controller.settings['ble']['pin_code'])
+
+    def test_invalid_pin_code_empty_string(self):
+        """Empty string pin_code should be rejected."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['pin_code'] = ""
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertIsNone(controller.settings['ble']['pin_code'])
+
+    def test_ble_controller_stores_string_pin_code(self):
+        """BLEController should store string pin_code from settings."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['pin_code'] = "007"
+        ble = BLEController(settings)
+        self.assertEqual(ble.pin_code, "007")
 
     def test_connect_async_no_auth_when_pin_code_none(self):
         """When pin_code is None, write_gatt_char should NOT be called during connect."""

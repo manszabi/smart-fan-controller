@@ -49,7 +49,7 @@ DEFAULT_SETTINGS = {
         "command_timeout": 3,      # BLE parancs küldési időkorlát másodpercben (1–30)
         "service_uuid": "0000ffe0-0000-1000-8000-00805f9b34fb",         # GATT szerviz UUID
         "characteristic_uuid": "0000ffe1-0000-1000-8000-00805f9b34fb", # GATT karakterisztika UUID
-        "pin_code": None           # BLE PIN kód alkalmazás szintű autentikációhoz (null = nincs auth, 0–999999)
+        "pin_code": None           # BLE PIN kód alkalmazás szintű autentikációhoz (null = nincs auth, int 0–999999 vagy string pl. "007")
     },
     "data_source": {
         "power_source": "antplus",           # Power adatforrás: "antplus" vagy "ble"
@@ -829,9 +829,11 @@ class PowerZoneController:
                     if ble_settings['pin_code'] is None:
                         settings['ble']['pin_code'] = None
                     elif isinstance(ble_settings['pin_code'], int) and not isinstance(ble_settings['pin_code'], bool) and 0 <= ble_settings['pin_code'] <= 999999:
+                        settings['ble']['pin_code'] = str(ble_settings['pin_code'])
+                    elif isinstance(ble_settings['pin_code'], str) and len(ble_settings['pin_code']) > 0 and len(ble_settings['pin_code']) <= 20 and ble_settings['pin_code'].isdigit():
                         settings['ble']['pin_code'] = ble_settings['pin_code']
                     else:
-                        print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'pin_code' érték: {ble_settings['pin_code']} (0-999999 közötti egész szám vagy null kell legyen)")
+                        print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'pin_code' érték: {ble_settings['pin_code']} (0-999999 közötti egész szám, számjegyekből álló szöveg, vagy null kell legyen)")
                         validation_failed = True
             else:
                 print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'ble' formátum")
