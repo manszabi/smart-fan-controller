@@ -505,6 +505,7 @@ class PowerZoneController:
         self.current_heart_rate = None
         self.current_hr_zone = None
         self.current_power_zone = None
+        self.current_avg_power = None
         hr_buffer_size = int(self.buffer_seconds * 4)
         self.hr_buffer = deque(maxlen=hr_buffer_size)
         self.last_hr_print_time = 0
@@ -1146,10 +1147,16 @@ class PowerZoneController:
             if zone_mode != 'hr_only':
                 current_time = time.time()
                 if current_time - self.last_power_print_time >= 1.0:
-                    if self.current_power_zone is not None:
-                        print(f"Teljesítmény: {power}W | Teljesítmény zóna: {self.current_power_zone}")
-                    else:
-                        print(f"Teljesítmény: {power}W")
+                    if zone_mode == 'higher_wins':
+                        if self.current_heart_rate is not None:
+                            print(f"❤ HR: {self.current_heart_rate} bpm | ⚡ Teljesítmény: {power} watt")
+                        else:
+                            print(f"⚡ Teljesítmény: {power} watt")
+                    else:  # power_only
+                        if self.current_power_zone is not None:
+                            print(f"⚡ Teljesítmény: {power} watt | Teljesítmény zóna: {self.current_power_zone}")
+                        else:
+                            print(f"⚡ Teljesítmény: {power} watt")
                     self.last_power_print_time = current_time
 
             if len(self.power_buffer) < self.minimum_samples:
@@ -1159,15 +1166,16 @@ class PowerZoneController:
             avg_power = sum(self.power_buffer) // len(self.power_buffer)
             new_power_zone = self.get_zone_for_power(avg_power)
             self.current_power_zone = new_power_zone
+            self.current_avg_power = avg_power
 
             if zone_mode == 'hr_only':
                 current_time = time.time()
                 if current_time - self.last_power_print_time >= 1.0:
-                    print(f"Átlag teljesítmény: {avg_power}W | Power zóna: {new_power_zone}")
+                    print(f"⚡ Átlag teljesítmény: {avg_power} watt | Power zóna: {new_power_zone}")
                     self.last_power_print_time = current_time
                 return
 
-            print(f"Átlag teljesítmény: {avg_power}W | Power zóna: {new_power_zone}")
+            print(f"⚡ Átlag teljesítmény: {avg_power} watt | Power zóna: {new_power_zone}")
 
             if zone_mode == 'higher_wins' and self.current_hr_zone is not None:
                 new_zone = max(new_power_zone, self.current_hr_zone)
@@ -1247,7 +1255,7 @@ class PowerZoneController:
             if zone_mode == 'power_only':
                 current_time = time.time()
                 if current_time - self.last_hr_zone_print_time >= 1.0:
-                    print(f"❤ HR: {avg_hr} bpm | HR zóna: {new_hr_zone}")
+                    print(f"❤ Átlag HR: {avg_hr} bpm | HR zóna: {new_hr_zone}")
                     self.last_hr_zone_print_time = current_time
                 return
 
@@ -1256,13 +1264,14 @@ class PowerZoneController:
                 print(f"❤ Átlag HR: {avg_hr} bpm | HR zóna: {new_hr_zone}")
                 target_zone = new_hr_zone
             else:  # higher_wins
-                print(f"❤ HR: {avg_hr} bpm | HR zóna: {new_hr_zone}")
-                if self.current_power_zone is not None:
-                    target_zone = max(self.current_power_zone, new_hr_zone)
-                    print(f"🏆 Nyertes zóna: {target_zone} (power: {self.current_power_zone}, hr: {new_hr_zone})")
+                if self.current_power_zone is not None and self.current_avg_power is not None:
+                    avg_power = self.current_avg_power
+                    power_zone = self.current_power_zone
+                    target_zone = max(power_zone, new_hr_zone)
+                    print(f"⚡ Átlag teljesítmény: {avg_power} watt | Power zóna: {power_zone} | ❤ Átlag HR: {avg_hr} bpm | HR zóna: {new_hr_zone} | Higher Wins!")
                 else:
                     target_zone = new_hr_zone
-                    print(f"🏆 Nyertes zóna: {target_zone} (hr alapján, power adat hiányzik)")
+                    print(f"❤ Átlag HR: {avg_hr} bpm | HR zóna: {new_hr_zone}")
 
             cooldown_send_zone = None
             zone_change_send = None
