@@ -859,7 +859,7 @@ class TestBLEPINSettings(unittest.TestCase):
         self.assertEqual(data_sent, b"AUTH:123456")
 
     def test_connect_async_continues_on_auth_error(self):
-        """If write_gatt_char raises during AUTH, is_connected should still be True."""
+        """If write_gatt_char raises during AUTH, connection should be aborted (is_connected=False, returns False)."""
         import asyncio
 
         settings = copy.deepcopy(DEFAULT_SETTINGS)
@@ -876,8 +876,12 @@ class TestBLEPINSettings(unittest.TestCase):
         async def failing_write(uuid, data):
             raise Exception("write error")
 
+        async def mock_disconnect():
+            pass
+
         mock_client.connect = mock_connect
         mock_client.write_gatt_char = failing_write
+        mock_client.disconnect = mock_disconnect
 
         async def run():
             with patch('smart_fan_controller.BleakClient', return_value=mock_client):
@@ -890,8 +894,8 @@ class TestBLEPINSettings(unittest.TestCase):
         finally:
             loop.close()
 
-        self.assertTrue(result)
-        self.assertTrue(ble.is_connected)
+        self.assertFalse(result)
+        self.assertFalse(ble.is_connected)
 
 
 class TestHRZoneSettings(unittest.TestCase):
@@ -1228,13 +1232,20 @@ class TestProcessHeartRateDataThreadSafety(unittest.TestCase):
         settings['minimum_samples'] = 1
         settings['buffer_seconds'] = 1
         settings['heart_rate_zones']['enabled'] = False
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings, f, indent=2)
+        f.close()
+        self._tmp = f.name
         self.controller = PowerZoneController(f.name)
         self.controller.ble.running = True
         self.sent_commands = []
         self.controller.ble.send_command_sync = lambda level: self.sent_commands.append(level)
 
+    def setUp(self):
+        self._make_controller()
+
     def tearDown(self):
-        if os.path.exists(self._tmp):
+        if hasattr(self, '_tmp') and os.path.exists(self._tmp):
             os.unlink(self._tmp)
 
     def test_check_dropout_reads_last_data_time_under_lock(self):
@@ -1281,7 +1292,9 @@ class TestCooldownElif(unittest.TestCase):
         json.dump(settings, f, indent=2)
         f.close()
         self._tmp = f.name
-        controller = PowerZoneController(f.name)
+
+    def _make_controller(self):
+        controller = PowerZoneController(self._tmp)
         controller.ble.running = True
         controller.ble.send_command_sync = lambda level: None
         return controller

@@ -96,6 +96,11 @@ class BLEController:
         is_connected (bool): True, ha a BLE kapcsolat aktív.
     """
 
+    QUEUE_POLL_TIMEOUT = 0.5
+    DISCONNECT_TIMEOUT = 5.0
+    RETRY_RESET_SECONDS = 30
+    STOP_JOIN_TIMEOUT = 5
+
     def __init__(self, settings):
         """Inicializálja a BLEController-t a megadott beállításokkal.
 
@@ -122,6 +127,7 @@ class BLEController:
         self._state_lock = threading.Lock()
 
         self.command_queue = queue.Queue(maxsize=1)
+        self._queue_lock = threading.Lock()
         self.running = False
         self.thread = None
         self.loop = None
@@ -134,13 +140,13 @@ class BLEController:
         Ha a szál már fut, figyelmeztetést ír ki és visszatér.
         """
         if self.running:
-            print("⚠ BLE thread már fut!")
+            logger.warning("BLE thread már fut!")
             return
-        
+
         self.running = True
         self.thread = threading.Thread(target=self._ble_loop, daemon=True, name="BLE-Thread")
         self.thread.start()
-        print("✓ BLE thread elindítva")
+        logger.info("BLE thread elindítva")
 
     def _ble_loop(self):
         """A BLE háttérszál fő ciklusa.
@@ -152,35 +158,34 @@ class BLEController:
         """
         try:
             self.loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(self.loop)
-            
-            print("🔍 BLE inicializálás...")
+
+            logger.info("BLE inicializálás...")
             self.loop.run_until_complete(self._initial_connect())
-            
+
             self.ready_event.set()
 
             while self.running:
                 try:
                     try:
-                        level = self.command_queue.get(timeout=0.5)
-                        
+                        level = self.command_queue.get(timeout=self.QUEUE_POLL_TIMEOUT)
+
                         self.loop.run_until_complete(self._send_command_async(level))
                     except queue.Empty:
                         continue
                 except Exception as e:
-                    print(f"✗ BLE loop hiba: {e}")
+                    logger.error(f"BLE loop hiba: {e}")
                     time.sleep(1)
 
-            print("🔌 BLE kapcsolat lezárása...")
+            logger.info("BLE kapcsolat lezárása...")
             self.loop.run_until_complete(self._disconnect_async())
 
         except Exception as e:
-            print(f"✗ BLE thread kritikus hiba: {e}")
+            logger.error(f"BLE thread kritikus hiba: {e}")
         finally:
             self.ready_event.set()
             if self.loop:
                 self.loop.close()
-            print("✓ BLE thread leállt")
+            logger.info("BLE thread leállt")
 
     async def _initial_connect(self):
         """Kezdeti BLE kapcsolat felépítése indításkor.
@@ -191,8 +196,7 @@ class BLEController:
         """
         success = await self._scan_and_connect_async()
         if not success:
-            print(f"⚠ Nem sikerült csatlakozni a BLE eszközhöz, de folytatjuk...")
-            print(f"  A program automatikusan újrapróbálkozik parancs küldéskor.")
+            logger.warning("Nem sikerült csatlakozni a BLE eszközhöz, de folytatjuk. A program automatikusan újrapróbálkozik parancs küldéskor.")
 
     async def _scan_and_connect_async(self):
         """BLE eszköz keresése és csatlakozás.
@@ -207,13 +211,13 @@ class BLEController:
             devices = await BleakScanner.discover(timeout=self.scan_timeout)
             for device in devices:
                 if device.name == self.device_name:
-                    print(f"✓ Eszköz megtalálva: {device.name} ({device.address})")
+                    logger.info(f"Eszköz megtalálva: {device.name} ({device.address})")
                     self.device_address = device.address
                     return await self._connect_async()
-            print(f"✗ Nem található: {self.device_name}")
+            logger.error(f"Nem található: {self.device_name}")
             return False
         except Exception as e:
-            print(f"✗ Keresési hiba: {e}")
+            logger.error(f"Keresési hiba: {e}")
             return False
 
     async def _connect_async(self):
@@ -238,7 +242,7 @@ class BLEController:
             )
             await self.client.connect()
             if self.pin_code is not None:
-                print(f"🔗 BLE PIN autentikáció folyamatban: {self.device_address}")
+                logger.info(f"BLE PIN autentikáció folyamatban: {self.device_address}")
                 try:
                     auth_message = f"AUTH:{self.pin_code}"
                     await asyncio.wait_for(
@@ -248,16 +252,26 @@ class BLEController:
                         ),
                         timeout=self.command_timeout
                     )
-                    print(f"✓ BLE PIN elküldve: {self.device_address}")
+                    logger.info(f"BLE PIN elküldve: {self.device_address}")
                 except Exception as auth_err:
-                    print(f"⚠ BLE PIN küldési hiba (folytatás): {auth_err}")
-            self.is_connected = True
-            self.retry_count = 0
-            self.retry_reset_time = None
-            print(f"✓ Csatlakozva: {self.device_address}")
+                    logger.error(f"BLE PIN küldési hiba: {auth_err} → kapcsolat bontása")
+                    try:
+                        await self.client.disconnect()
+                    except Exception:
+                        pass
+                    with self._state_lock:
+                        self.is_connected = False
+                    self.client = None
+                    return False
+            with self._state_lock:
+                self.is_connected = True
+                self.retry_count = 0
+                self.retry_reset_time = None
+                self.last_sent_command = None
+            logger.info(f"Csatlakozva: {self.device_address}")
             return True
         except Exception as e:
-            print(f"✗ Csatlakozási hiba: {e}")
+            logger.error(f"Csatlakozási hiba: {e}")
             with self._state_lock:
                 self.is_connected = False
             self.client = None
@@ -278,7 +292,7 @@ class BLEController:
 
     def _on_disconnect(self, client):
         """Callback: BLE kapcsolat váratlan megszakadásakor hívódik meg."""
-        print("⚠ BLE kapcsolat váratlanul megszakadt")
+        logger.warning("BLE kapcsolat váratlanul megszakadt")
         with self._state_lock:
             self.is_connected = False
             self.last_sent_command = None
@@ -287,10 +301,10 @@ class BLEController:
         """Bontja a BLE kapcsolatot és felszabadítja a klienst."""
         if self.client:
             try:
-                await asyncio.wait_for(self.client.disconnect(), timeout=5.0)
-                print("✓ BLE kapcsolat lezárva")
+                await asyncio.wait_for(self.client.disconnect(), timeout=self.DISCONNECT_TIMEOUT)
+                logger.info("BLE kapcsolat lezárva")
             except asyncio.TimeoutError:
-                print("⚠ BLE disconnect timeout")
+                logger.warning("BLE disconnect timeout")
             except Exception:
                 pass
             finally:
@@ -317,19 +331,19 @@ class BLEController:
         if not await self._is_connected_async():
             if self.retry_reset_time is not None:
                 elapsed = time.time() - self.retry_reset_time
-                if elapsed >= 30:
-                    print(f"🔄 Retry count reset ({elapsed:.0f}s telt el), újrapróbálkozás...")
+                if elapsed >= self.RETRY_RESET_SECONDS:
+                    logger.info(f"Retry count reset ({elapsed:.0f}s telt el), újrapróbálkozás...")
                     self.retry_count = 0
                     self.retry_reset_time = None
                 else:
-                    remaining = 30 - elapsed
-                    print(f"⏳ Újrapróbálkozás {remaining:.0f}s múlva...")
+                    remaining = self.RETRY_RESET_SECONDS - elapsed
+                    logger.info(f"Újrapróbálkozás {remaining:.0f}s múlva...")
                     await asyncio.sleep(min(remaining, self.reconnect_interval))
                     return False
 
             if self.retry_count < self.max_retries:
                 self.retry_count += 1
-                print(f"🔄 Újracsatlakozás... ({self.retry_count}/{self.max_retries})")
+                logger.info(f"Újracsatlakozás... ({self.retry_count}/{self.max_retries})")
                 if self.device_address:
                     if await self._connect_async():
                         return await self._send_immediate(level)
@@ -341,8 +355,7 @@ class BLEController:
             else:
                 if self.retry_reset_time is None:
                     self.retry_reset_time = time.time()
-                    print(f"⚠ Max újracsatlakozási kísérletek elérve ({self.max_retries})!")
-                    print(f"  30s múlva újrapróbálkozik...")
+                    logger.warning(f"Max újracsatlakozási kísérletek elérve ({self.max_retries})! {self.RETRY_RESET_SECONDS}s múlva újrapróbálkozik...")
                 return False
 
         return await self._send_immediate(level)
@@ -374,15 +387,15 @@ class BLEController:
             )
             with self._state_lock:
                 self.last_sent_command = level
-            print(f"✓ Parancs elküldve: {message}")
+            logger.info(f"Parancs elküldve: {message}")
             return True
         except asyncio.TimeoutError:
-            print(f"✗ Parancs küldés timeout ({self.command_timeout}s)")
+            logger.error(f"Parancs küldés timeout ({self.command_timeout}s)")
             with self._state_lock:
                 self.is_connected = False
             return False
         except Exception as e:
-            print(f"✗ Küldési hiba: {e}")
+            logger.error(f"Küldési hiba: {e}")
             with self._state_lock:
                 self.is_connected = False
             return False
@@ -399,14 +412,12 @@ class BLEController:
                          figyelmeztetést ír ki és visszatér.
         """
         if isinstance(level, bool) or not isinstance(level, int) or level < 0 or level > 3:
-            print(f"⚠ Érvénytelen parancs szint: {level} (egész számnak kell lennie, 0-3 között)")
+            logger.warning(f"Érvénytelen parancs szint: {level} (egész számnak kell lennie, 0-3 között)")
             return
         if not self.running:
-            print("⚠ BLE thread nem fut, parancs elvetve")
+            logger.warning("BLE thread nem fut, parancs elvetve")
             return
-        try:
-            self.command_queue.put_nowait(level)
-        except queue.Full:
+        with self._queue_lock:
             try:
                 self.command_queue.get_nowait()
             except queue.Empty:
@@ -414,7 +425,7 @@ class BLEController:
             try:
                 self.command_queue.put_nowait(level)
             except queue.Full:
-                print(f"⚠ Queue hiba, parancs elvetve: LEVEL:{level}")
+                logger.warning(f"Queue hiba, parancs elvetve: LEVEL:{level}")
 
     def stop(self):
         """Leállítja a BLE háttérszálat.
@@ -424,14 +435,14 @@ class BLEController:
         """
         if not self.running:
             return
-        print("🛑 BLE thread leállítása...")
+        logger.info("BLE thread leállítása...")
         self.running = False
         if self.thread and self.thread.is_alive():
-            self.thread.join(timeout=5)
+            self.thread.join(timeout=self.STOP_JOIN_TIMEOUT)
             if self.thread.is_alive():
-                print("⚠ BLE thread nem állt le időben")
+                logger.warning("BLE thread nem állt le időben")
             else:
-                print("✓ BLE thread leállítva")
+                logger.info("BLE thread leállítva")
 
 
 # ============================================================
@@ -472,6 +483,10 @@ class PowerZoneController:
         ble (BLEController): A BLE kommunikációs réteg.
     """
 
+    BUFFER_RATE_HZ = 4
+    COOLDOWN_PRINT_INTERVAL = 10
+    PRINT_THROTTLE_SECONDS = 1.0
+
     def __init__(self, settings_file="settings.json"):
         """Inicializálja a PowerZoneController-t.
 
@@ -505,7 +520,7 @@ class PowerZoneController:
 
         self.last_data_time = time.time()
 
-        buffer_size = int(self.buffer_seconds * 4)
+        buffer_size = int(self.buffer_seconds * self.BUFFER_RATE_HZ)
         self.power_buffer = deque(maxlen=buffer_size)
 
         self.state_lock = threading.Lock()
@@ -515,7 +530,7 @@ class PowerZoneController:
         self.current_hr_zone = None
         self.current_power_zone = None
         self.current_avg_power = None
-        hr_buffer_size = int(self.buffer_seconds * 4)
+        hr_buffer_size = int(self.buffer_seconds * self.BUFFER_RATE_HZ)
         self.hr_buffer = deque(maxlen=hr_buffer_size)
         self.last_hr_print_time = 0
         self.last_power_print_time = 0
@@ -559,7 +574,7 @@ class PowerZoneController:
             name="Dropout-Thread"
         )
         self.dropout_thread.start()
-        print("✓ Dropout ellenőrző thread elindítva")
+        logger.info("Dropout ellenőrző thread elindítva")
 
     def _dropout_check_loop(self):
         """A dropout ellenőrző szál ciklusa – másodpercenként fut."""
@@ -572,7 +587,7 @@ class PowerZoneController:
         self.running = False
         if self.dropout_thread and self.dropout_thread.is_alive():
             self.dropout_thread.join(timeout=3)
-            print("✓ Dropout ellenőrző thread leállítva")
+            logger.info("Dropout ellenőrző thread leállítva")
 
     def load_and_validate_settings(self, settings_file):
         """Betölti és validálja a JSON beállítási fájlt.
@@ -882,7 +897,7 @@ class PowerZoneController:
             settings['max_watt'] = DEFAULT_SETTINGS['max_watt']
             validation_failed = True
 
-        buffer_size = settings['buffer_seconds'] * 4
+        buffer_size = settings['buffer_seconds'] * self.BUFFER_RATE_HZ
         if settings['minimum_samples'] > buffer_size:
             print(f"⚠ FIGYELMEZTETÉS: 'minimum_samples' ({settings['minimum_samples']}) nagyobb mint buffer méret ({buffer_size})!")
             settings['minimum_samples'] = buffer_size
@@ -909,7 +924,7 @@ class PowerZoneController:
         """
         try:
             with open(settings_file, 'w', encoding='utf-8') as f:
-                json.dump(DEFAULT_SETTINGS, f, indent=2, ensure_ascii=False)
+                json.dump(copy.deepcopy(DEFAULT_SETTINGS), f, indent=2, ensure_ascii=False)
             print(f"✓ Alapértelmezett '{settings_file}' létrehozva.")
             print(f"  Szerkeszd a fájlt a beállítások módosításához: {os.path.abspath(settings_file)}")
         except PermissionError:
@@ -1010,6 +1025,8 @@ class PowerZoneController:
                 return False
             if power < 0:
                 return False
+            if 0 < power < self.min_watt:
+                return False
             if power > self.max_watt:
                 return False
             return True
@@ -1099,7 +1116,7 @@ class PowerZoneController:
             self.pending_zone = None
         else:
             remaining = self.cooldown_seconds - time_elapsed
-            should_print = (current_time - self.last_cooldown_print) >= 10
+            should_print = (current_time - self.last_cooldown_print) >= self.COOLDOWN_PRINT_INTERVAL
 
             if new_zone != self.pending_zone and new_zone < self.current_zone:
                 self.pending_zone = new_zone
@@ -1213,7 +1230,7 @@ class PowerZoneController:
 
             if zone_mode != 'hr_only':
                 current_time = time.time()
-                if current_time - self.last_power_print_time >= 1.0:
+                if current_time - self.last_power_print_time >= self.PRINT_THROTTLE_SECONDS:
                     if zone_mode == 'higher_wins':
                         if self.current_heart_rate is not None and hr_is_fresh:
                             print(f"❤ HR: {self.current_heart_rate} bpm | ⚡ Teljesítmény: {power} watt")
@@ -1237,7 +1254,7 @@ class PowerZoneController:
 
             if zone_mode == 'hr_only':
                 current_time = time.time()
-                if current_time - self.last_power_print_time >= 1.0:
+                if current_time - self.last_power_print_time >= self.PRINT_THROTTLE_SECONDS:
                     print(f"⚡ Átlag teljesítmény: {avg_power} watt | Power zóna: {new_power_zone}")
                     self.last_power_print_time = current_time
                 return
@@ -1295,7 +1312,7 @@ class PowerZoneController:
 
             if not self.hr_zone_settings.get('enabled', False):
                 current_time = time.time()
-                if current_time - self.last_hr_print_time >= 1.0:
+                if current_time - self.last_hr_print_time >= self.PRINT_THROTTLE_SECONDS:
                     print(f"❤ Szívfrekvencia: {hr} bpm")
                     self.last_hr_print_time = current_time
                 return
@@ -1305,7 +1322,7 @@ class PowerZoneController:
             # hr_only módban a bejövő adat kiírása (throttle-ölve)
             if zone_mode == 'hr_only':
                 current_time = time.time()
-                if current_time - self.last_hr_print_time >= 1.0:
+                if current_time - self.last_hr_print_time >= self.PRINT_THROTTLE_SECONDS:
                     if self.current_hr_zone is not None:
                         print(f"❤ HR: {hr} bpm | HR zóna: {self.current_hr_zone}")
                     else:
@@ -1319,11 +1336,10 @@ class PowerZoneController:
             new_hr_zone = self.get_hr_zone(avg_hr)
             self.current_hr_zone = new_hr_zone
 
-            zone_mode = self.hr_zone_settings.get('zone_mode', 'power_only')
-
+            # zone_mode already computed above – reuse instead of re-querying
             if zone_mode == 'power_only':
                 current_time = time.time()
-                if current_time - self.last_hr_zone_print_time >= 1.0:
+                if current_time - self.last_hr_zone_print_time >= self.PRINT_THROTTLE_SECONDS:
                     print(f"❤ Átlag HR: {avg_hr} bpm | HR zóna: {new_hr_zone}")
                     self.last_hr_zone_print_time = current_time
                 return
@@ -1375,6 +1391,8 @@ class BLEPowerReceiver:
 
     CYCLING_POWER_SERVICE_UUID = "00001818-0000-1000-8000-00805f9b34fb"
     CYCLING_POWER_MEASUREMENT_UUID = "00002a63-0000-1000-8000-00805f9b34fb"
+    RETRY_RESET_SECONDS = 30
+    STOP_JOIN_TIMEOUT = 5
 
     def __init__(self, settings, controller):
         """Inicializálja a BLEPowerReceiver-t.
@@ -1391,33 +1409,45 @@ class BLEPowerReceiver:
         self.controller = controller
 
         self.running = False
-        self.is_connected = False
+        self._is_connected = False
+        self._state_lock = threading.Lock()
+        self._stop_event = None
         self.thread = None
         self.loop = None
         self._retry_count = 0
 
+    @property
+    def is_connected(self):
+        with self._state_lock:
+            return self._is_connected
+
+    @is_connected.setter
+    def is_connected(self, value):
+        with self._state_lock:
+            self._is_connected = value
+
     def start(self):
         """Elindítja a BLE power fogadó háttérszálat."""
         if self.running:
-            print("⚠ BLE Power thread már fut!")
+            logger.warning("BLE Power thread már fut!")
             return
         self.running = True
         self.thread = threading.Thread(target=self._run_loop, daemon=True, name="BLEPower-Thread")
         self.thread.start()
-        print("✓ BLE Power thread elindítva")
+        logger.info("BLE Power thread elindítva")
 
     def _run_loop(self):
         """A BLE power háttérszál fő ciklusa."""
         try:
             self.loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(self.loop)
+            self._stop_event = asyncio.Event()
             self.loop.run_until_complete(self._receive_loop())
         except Exception as e:
-            print(f"✗ BLE Power thread kritikus hiba: {e}")
+            logger.error(f"BLE Power thread kritikus hiba: {e}")
         finally:
             if self.loop:
                 self.loop.close()
-            print("✓ BLE Power thread leállítva")
+            logger.info("BLE Power thread leállítva")
 
     async def _receive_loop(self):
         """BLE power adatfogadás ciklusa újracsatlakozási logikával."""
@@ -1428,11 +1458,11 @@ class BLEPowerReceiver:
                 if not self.running:
                     break
                 self._retry_count += 1
-                print(f"⚠ BLE Power kapcsolat megszakadt ({self._retry_count}/{self.max_retries}): {e}")
+                logger.warning(f"BLE Power kapcsolat megszakadt ({self._retry_count}/{self.max_retries}): {e}")
                 self.is_connected = False
                 if self._retry_count >= self.max_retries:
-                    print(f"⚠ Max BLE Power újracsatlakozási kísérletek elérve! 30s várakozás...")
-                    await asyncio.sleep(30)
+                    logger.warning(f"Max BLE Power újracsatlakozási kísérletek elérve! {self.RETRY_RESET_SECONDS}s várakozás...")
+                    await asyncio.sleep(self.RETRY_RESET_SECONDS)
                     self._retry_count = 0
                 else:
                     await asyncio.sleep(self.reconnect_interval)
@@ -1440,27 +1470,28 @@ class BLEPowerReceiver:
     async def _scan_and_subscribe(self):
         """BLE power meter keresése, csatlakozás és notification feliratkozás."""
         if not self.device_name:
-            print("⚠ BLE Power: nincs eszköznév megadva, várakozás...")
+            logger.warning("BLE Power: nincs eszköznév megadva, várakozás...")
             await asyncio.sleep(self.reconnect_interval)
             return
 
-        print(f"🔍 BLE Power keresés: {self.device_name}...")
+        logger.info(f"BLE Power keresés: {self.device_name}...")
         devices = await BleakScanner.discover(timeout=self.scan_timeout)
         device_addr = None
         for d in devices:
             if d.name == self.device_name:
                 device_addr = d.address
-                print(f"✓ BLE Power eszköz megtalálva: {d.name} ({d.address})")
+                logger.info(f"BLE Power eszköz megtalálva: {d.name} ({d.address})")
                 break
 
         if not device_addr:
-            print(f"✗ BLE Power eszköz nem található: {self.device_name}")
+            logger.error(f"BLE Power eszköz nem található: {self.device_name}")
             raise Exception(f"Device not found: {self.device_name}")
 
+        self._stop_event.clear()
         async with BleakClient(device_addr) as client:
             self.is_connected = True
             self._retry_count = 0
-            print(f"✓ BLE Power csatlakozva: {device_addr}")
+            logger.info(f"BLE Power csatlakozva: {device_addr}")
 
             def notification_handler(sender, data):
                 try:
@@ -1470,10 +1501,10 @@ class BLEPowerReceiver:
                     power = int.from_bytes(data[2:4], byteorder='little', signed=True)
                     self.controller.process_power_data(power)
                 except Exception as e:
-                    print(f"⚠ BLE Power notification parse hiba: {e}")
+                    logger.warning(f"BLE Power notification parse hiba: {e}")
 
             await client.start_notify(self.CYCLING_POWER_MEASUREMENT_UUID, notification_handler)
-            while self.running and client.is_connected:
+            while self.running and client.is_connected and not self._stop_event.is_set():
                 await asyncio.sleep(1)
             await client.stop_notify(self.CYCLING_POWER_MEASUREMENT_UUID)
 
@@ -1483,16 +1514,16 @@ class BLEPowerReceiver:
         """Leállítja a BLE power háttérszálat."""
         if not self.running:
             return
-        print("🛑 BLE Power thread leállítása...")
+        logger.info("BLE Power thread leállítása...")
         self.running = False
-        if self.loop and self.loop.is_running():
-            self.loop.call_soon_threadsafe(self.loop.stop)
+        if self.loop and self._stop_event is not None:
+            self.loop.call_soon_threadsafe(self._stop_event.set)
         if self.thread and self.thread.is_alive():
-            self.thread.join(timeout=5)
+            self.thread.join(timeout=self.STOP_JOIN_TIMEOUT)
             if self.thread.is_alive():
-                print("⚠ BLE Power thread nem állt le időben")
+                logger.warning("BLE Power thread nem állt le időben")
             else:
-                print("✓ BLE Power thread leállítva")
+                logger.info("BLE Power thread leállítva")
 
 
 # ============================================================
@@ -1511,6 +1542,8 @@ class BLEHeartRateReceiver:
 
     HEART_RATE_SERVICE_UUID = "0000180d-0000-1000-8000-00805f9b34fb"
     HEART_RATE_MEASUREMENT_UUID = "00002a37-0000-1000-8000-00805f9b34fb"
+    RETRY_RESET_SECONDS = 30
+    STOP_JOIN_TIMEOUT = 5
 
     def __init__(self, settings, controller):
         """Inicializálja a BLEHeartRateReceiver-t.
@@ -1527,33 +1560,45 @@ class BLEHeartRateReceiver:
         self.controller = controller
 
         self.running = False
-        self.is_connected = False
+        self._is_connected = False
+        self._state_lock = threading.Lock()
+        self._stop_event = None
         self.thread = None
         self.loop = None
         self._retry_count = 0
 
+    @property
+    def is_connected(self):
+        with self._state_lock:
+            return self._is_connected
+
+    @is_connected.setter
+    def is_connected(self, value):
+        with self._state_lock:
+            self._is_connected = value
+
     def start(self):
         """Elindítja a BLE HR fogadó háttérszálat."""
         if self.running:
-            print("⚠ BLE HR thread már fut!")
+            logger.warning("BLE HR thread már fut!")
             return
         self.running = True
         self.thread = threading.Thread(target=self._run_loop, daemon=True, name="BLEHR-Thread")
         self.thread.start()
-        print("✓ BLE HR thread elindítva")
+        logger.info("BLE HR thread elindítva")
 
     def _run_loop(self):
         """A BLE HR háttérszál fő ciklusa."""
         try:
             self.loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(self.loop)
+            self._stop_event = asyncio.Event()
             self.loop.run_until_complete(self._receive_loop())
         except Exception as e:
-            print(f"✗ BLE HR thread kritikus hiba: {e}")
+            logger.error(f"BLE HR thread kritikus hiba: {e}")
         finally:
             if self.loop:
                 self.loop.close()
-            print("✓ BLE HR thread leállítva")
+            logger.info("BLE HR thread leállítva")
 
     async def _receive_loop(self):
         """BLE HR adatfogadás ciklusa újracsatlakozási logikával."""
@@ -1564,11 +1609,11 @@ class BLEHeartRateReceiver:
                 if not self.running:
                     break
                 self._retry_count += 1
-                print(f"⚠ BLE HR kapcsolat megszakadt ({self._retry_count}/{self.max_retries}): {e}")
+                logger.warning(f"BLE HR kapcsolat megszakadt ({self._retry_count}/{self.max_retries}): {e}")
                 self.is_connected = False
                 if self._retry_count >= self.max_retries:
-                    print(f"⚠ Max BLE HR újracsatlakozási kísérletek elérve! 30s várakozás...")
-                    await asyncio.sleep(30)
+                    logger.warning(f"Max BLE HR újracsatlakozási kísérletek elérve! {self.RETRY_RESET_SECONDS}s várakozás...")
+                    await asyncio.sleep(self.RETRY_RESET_SECONDS)
                     self._retry_count = 0
                 else:
                     await asyncio.sleep(self.reconnect_interval)
@@ -1576,27 +1621,28 @@ class BLEHeartRateReceiver:
     async def _scan_and_subscribe(self):
         """BLE HR eszköz keresése, csatlakozás és notification feliratkozás."""
         if not self.device_name:
-            print("⚠ BLE HR: nincs eszköznév megadva, várakozás...")
+            logger.warning("BLE HR: nincs eszköznév megadva, várakozás...")
             await asyncio.sleep(self.reconnect_interval)
             return
 
-        print(f"🔍 BLE HR keresés: {self.device_name}...")
+        logger.info(f"BLE HR keresés: {self.device_name}...")
         devices = await BleakScanner.discover(timeout=self.scan_timeout)
         device_addr = None
         for d in devices:
             if d.name == self.device_name:
                 device_addr = d.address
-                print(f"✓ BLE HR eszköz megtalálva: {d.name} ({d.address})")
+                logger.info(f"BLE HR eszköz megtalálva: {d.name} ({d.address})")
                 break
 
         if not device_addr:
-            print(f"✗ BLE HR eszköz nem található: {self.device_name}")
+            logger.error(f"BLE HR eszköz nem található: {self.device_name}")
             raise Exception(f"Device not found: {self.device_name}")
 
+        self._stop_event.clear()
         async with BleakClient(device_addr) as client:
             self.is_connected = True
             self._retry_count = 0
-            print(f"✓ BLE HR csatlakozva: {device_addr}")
+            logger.info(f"BLE HR csatlakozva: {device_addr}")
 
             def notification_handler(sender, data):
                 try:
@@ -1605,15 +1651,17 @@ class BLEHeartRateReceiver:
                     flags = data[0]
                     # bit 0 of flags: 0 = 8-bit HR value, 1 = 16-bit HR value
                     if flags & 0x01:
+                        if len(data) < 3:
+                            return
                         hr = int.from_bytes(data[1:3], byteorder='little')
                     else:
                         hr = data[1]
                     self.controller.process_heart_rate_data(hr)
                 except Exception as e:
-                    print(f"⚠ BLE HR notification parse hiba: {e}")
+                    logger.warning(f"BLE HR notification parse hiba: {e}")
 
             await client.start_notify(self.HEART_RATE_MEASUREMENT_UUID, notification_handler)
-            while self.running and client.is_connected:
+            while self.running and client.is_connected and not self._stop_event.is_set():
                 await asyncio.sleep(1)
             await client.stop_notify(self.HEART_RATE_MEASUREMENT_UUID)
 
@@ -1623,16 +1671,16 @@ class BLEHeartRateReceiver:
         """Leállítja a BLE HR háttérszálat."""
         if not self.running:
             return
-        print("🛑 BLE HR thread leállítása...")
+        logger.info("BLE HR thread leállítása...")
         self.running = False
-        if self.loop and self.loop.is_running():
-            self.loop.call_soon_threadsafe(self.loop.stop)
+        if self.loop and self._stop_event is not None:
+            self.loop.call_soon_threadsafe(self._stop_event.set)
         if self.thread and self.thread.is_alive():
-            self.thread.join(timeout=5)
+            self.thread.join(timeout=self.STOP_JOIN_TIMEOUT)
             if self.thread.is_alive():
-                print("⚠ BLE HR thread nem állt le időben")
+                logger.warning("BLE HR thread nem állt le időben")
             else:
-                print("✓ BLE HR thread leállítva")
+                logger.info("BLE HR thread leállítva")
 
 
 
@@ -1696,6 +1744,7 @@ class DataSourceManager:
             power = data.instantaneous_power
             self.controller.process_power_data(power)
         elif isinstance(data, HeartRateData):
+            self.antplus_last_data = time.time()
             hr = data.heart_rate
             self.controller.process_heart_rate_data(hr)
 
@@ -1750,17 +1799,17 @@ class DataSourceManager:
                 )
                 self.antplus_thread = ant_thread
                 ant_thread.start()
-                print("✓ ANT+ figyelés elindítva")
+                logger.info("ANT+ figyelés elindítva")
                 return True
 
             except Exception as e:
-                print(f"⚠ ANT+ inicializálás sikertelen ({attempt}/{max_init_retries}): {e}")
+                logger.warning(f"ANT+ inicializálás sikertelen ({attempt}/{max_init_retries}): {e}")
                 self.antplus_node = None
                 if attempt < max_init_retries:
-                    print(f"🔄 Újrapróbálkozás {init_retry_delay}s múlva...")
+                    logger.info(f"Újrapróbálkozás {init_retry_delay}s múlva...")
                     time.sleep(init_retry_delay)
 
-        print("✗ ANT+ indítás sikertelen minden kísérlet után")
+        logger.error("ANT+ indítás sikertelen minden kísérlet után")
         return False
 
     def _antplus_loop(self):
@@ -1783,37 +1832,46 @@ class DataSourceManager:
                 if self.antplus_last_data > 0:
                     retry_count = 0
                 retry_count += 1
-                print(f"⚠ ANT+ node leállt, újraindítás... ({retry_count}/{self.ANTPLUS_MAX_RETRIES})")
+                logger.warning(f"ANT+ node leállt, újraindítás... ({retry_count}/{self.ANTPLUS_MAX_RETRIES})")
                 self.antplus_last_data = 0
 
                 if retry_count >= self.ANTPLUS_MAX_RETRIES:
-                    print(f"⚠ Max ANT+ újracsatlakozási kísérletek elérve ({self.ANTPLUS_MAX_RETRIES})!")
-                    print(f"  30s múlva újrapróbálkozik...")
+                    logger.warning(f"Max ANT+ újracsatlakozási kísérletek elérve ({self.ANTPLUS_MAX_RETRIES})! 30s múlva újrapróbálkozik...")
                     time.sleep(30)
                     if not self.running:
                         break
-                    print(f"🔄 ANT+ retry count reset, újrapróbálkozás...")
+                    logger.info("ANT+ retry count reset, újrapróbálkozás...")
                     retry_count = 0
+
+                try:
+                    self._stop_antplus_node()
+                    time.sleep(1)
+                    self._init_antplus_node()
+                    logger.info("ANT+ node újrainicializálva, újrapróbálkozás...")
+                except Exception as re:
+                    logger.error(f"ANT+ újrainicializálás hiba: {re}")
+                    time.sleep(self.ANTPLUS_RECONNECT_DELAY)
+                    if not self.running:
+                        break
 
             except Exception as e:
                 if not self.running:
                     break
 
                 retry_count += 1
-                print(f"⚠ ANT+ kapcsolat megszakadt ({retry_count}/{self.ANTPLUS_MAX_RETRIES}): {e}")
+                logger.warning(f"ANT+ kapcsolat megszakadt ({retry_count}/{self.ANTPLUS_MAX_RETRIES}): {e}")
                 self.antplus_last_data = 0
 
                 if retry_count >= self.ANTPLUS_MAX_RETRIES:
-                    print(f"⚠ Max ANT+ újracsatlakozási kísérletek elérve ({self.ANTPLUS_MAX_RETRIES})!")
-                    print(f"  30s múlva újrapróbálkozik...")
+                    logger.warning(f"Max ANT+ újracsatlakozási kísérletek elérve ({self.ANTPLUS_MAX_RETRIES})! 30s múlva újrapróbálkozik...")
                     time.sleep(30)
                     if not self.running:
                         break
-                    print(f"🔄 ANT+ retry count reset, újrapróbálkozás...")
+                    logger.info("ANT+ retry count reset, újrapróbálkozás...")
                     retry_count = 0
                     continue
 
-                print(f"🔄 ANT+ újracsatlakozás {self.ANTPLUS_RECONNECT_DELAY}s múlva...")
+                logger.info(f"ANT+ újracsatlakozás {self.ANTPLUS_RECONNECT_DELAY}s múlva...")
                 time.sleep(self.ANTPLUS_RECONNECT_DELAY)
 
                 if not self.running:
@@ -1823,9 +1881,9 @@ class DataSourceManager:
                     self._stop_antplus_node()
                     time.sleep(1)  # USB erőforrás felszabadulásra várakozás
                     self._init_antplus_node()
-                    print("✓ ANT+ node újrainicializálva, újrapróbálkozás...")
+                    logger.info("ANT+ node újrainicializálva, újrapróbálkozás...")
                 except Exception as re:
-                    print(f"✗ ANT+ újrainicializálás hiba: {re}")
+                    logger.error(f"ANT+ újrainicializálás hiba: {re}")
                     time.sleep(self.ANTPLUS_RECONNECT_DELAY)
                     if not self.running:
                         break
@@ -1851,9 +1909,9 @@ class DataSourceManager:
         try:
             self._stop_antplus_node()
             self.antplus_last_data = 0
-            print("✓ ANT+ leállítva")
+            logger.info("ANT+ leállítva")
         except Exception as e:
-            print(f"⚠ ANT+ leállítási hiba: {e}")
+            logger.warning(f"ANT+ leállítási hiba: {e}")
 
     def _monitor_loop(self):
         """Adatforrás monitor háttérszál – státusz kiírása.
@@ -1928,7 +1986,7 @@ class DataSourceManager:
             name="DataSource-Monitor"
         )
         self.monitor_thread.start()
-        print("✓ Adatforrás monitor elindítva")
+        logger.info("Adatforrás monitor elindítva")
 
     def stop(self):
         """Leállítja az összes adatforrást."""
@@ -1938,18 +1996,13 @@ class DataSourceManager:
             try:
                 self.ble_power_receiver.stop()
             except Exception as e:
-                print(f"BLE Power leállítási hiba: {e}")
+                logger.error(f"BLE Power leállítási hiba: {e}")
 
         if self.ble_hr_receiver:
             try:
                 self.ble_hr_receiver.stop()
             except Exception as e:
-                print(f"BLE HR leállítási hiba: {e}")
-
-        try:
-            self._stop_antplus_node()
-        except Exception as e:
-            print(f"ANT+ node leállítási hiba: {e}")
+                logger.error(f"BLE HR leállítási hiba: {e}")
 
         if self.antplus_thread and self.antplus_thread.is_alive():
             self.antplus_thread.join(timeout=5)
@@ -1960,7 +2013,7 @@ class DataSourceManager:
         try:
             self._stop_antplus()
         except Exception as e:
-            print(f"ANT+ leállítási hiba: {e}")
+            logger.error(f"ANT+ leállítási hiba: {e}")
 
 
 # ============================================================
