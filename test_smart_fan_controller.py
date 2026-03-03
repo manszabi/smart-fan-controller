@@ -2130,5 +2130,103 @@ class TestHROnlyPrintFormat(unittest.TestCase):
         self.assertTrue(any('Átlag HR' in s for s in printed_args))
 
 
+class TestStaleDataInHigherWins(unittest.TestCase):
+    """Test that stale HR/Power data is not used when the data source has dropped out."""
+
+    def _make_controller(self):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['minimum_samples'] = 1
+        settings['buffer_seconds'] = 1
+        settings['dropout_timeout'] = 5
+        settings['heart_rate_zones'] = {
+            'enabled': True,
+            'max_hr': 185,
+            'resting_hr': 60,
+            'zone_mode': 'higher_wins',
+            'z1_max_percent': 70,
+            'z2_max_percent': 80
+        }
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings, f, indent=2)
+        f.close()
+        self._tmp = f.name
+        controller = PowerZoneController(f.name)
+        controller.ble.running = True
+        self.sent_commands = []
+        controller.ble.send_command_sync = lambda level: self.sent_commands.append(level)
+        return controller
+
+    def tearDown(self):
+        if hasattr(self, '_tmp') and os.path.exists(self._tmp):
+            os.unlink(self._tmp)
+
+    def test_stale_hr_not_shown_in_power_print(self):
+        """In higher_wins, if HR sensor dropped out, power print must NOT show stale HR."""
+        controller = self._make_controller()
+        # Receive HR data, then simulate HR dropout by setting last_hr_data_time to old
+        controller.process_heart_rate_data(150)
+        controller.last_hr_data_time = time.time() - 100  # way past dropout_timeout
+        controller.last_power_print_time = 0  # force throttle to allow print
+        with patch('builtins.print') as mock_print:
+            controller.process_power_data(200)
+        printed_args = [str(c) for c in mock_print.call_args_list]
+        # Should NOT include HR data in the throttled print
+        self.assertFalse(any('❤ HR:' in s and 'bpm' in s for s in printed_args))
+
+    def test_fresh_hr_shown_in_power_print(self):
+        """In higher_wins, if HR sensor is active, power print MUST show fresh HR."""
+        controller = self._make_controller()
+        # Receive HR data, last_hr_data_time is fresh (set by process_heart_rate_data)
+        controller.process_heart_rate_data(150)
+        controller.last_power_print_time = 0  # force throttle to allow print
+        with patch('builtins.print') as mock_print:
+            controller.process_power_data(200)
+        printed_args = [str(c) for c in mock_print.call_args_list]
+        self.assertTrue(any('❤ HR:' in s and 'bpm' in s for s in printed_args))
+
+    def test_stale_hr_zone_not_used_in_power_zone_decision(self):
+        """In higher_wins, if HR sensor dropped out, stale hr_zone must not influence zone decision."""
+        controller = self._make_controller()
+        # Manually set a stale hr_zone (simulating a previous HR reading that is now outdated)
+        controller.current_hr_zone = 3
+        controller.last_hr_data_time = time.time() - 100  # way past dropout_timeout
+        # current_zone is None → first zone decision goes directly without cooldown
+        controller.process_power_data(50)  # power zone 1; stale HR zone 3 must not boost it
+        self.assertIn(1, self.sent_commands)
+        self.assertNotIn(3, self.sent_commands)
+
+    def test_stale_power_not_shown_in_hr_print(self):
+        """In higher_wins, if power meter dropped out, HR print must NOT show Higher Wins."""
+        controller = self._make_controller()
+        # Receive power data, then simulate power dropout
+        controller.process_power_data(200)
+        controller.last_data_time = time.time() - 100  # way past dropout_timeout
+        with patch('builtins.print') as mock_print:
+            controller.process_heart_rate_data(175)
+        printed_args = [str(c) for c in mock_print.call_args_list]
+        self.assertFalse(any('Higher Wins' in s for s in printed_args))
+
+    def test_stale_power_zone_not_used_in_hr_zone_decision(self):
+        """In higher_wins, if power meter dropped out, stale power_zone must not influence zone decision."""
+        controller = self._make_controller()
+        # Manually set stale power data (simulating a previous power reading that is now outdated)
+        controller.current_power_zone = 3
+        controller.current_avg_power = 200
+        controller.last_data_time = time.time() - 100  # way past dropout_timeout
+        # current_zone is None → first zone decision goes directly without cooldown
+        controller.process_heart_rate_data(120)  # hr zone 1; stale power zone 3 must not boost it
+        self.assertIn(1, self.sent_commands)
+        self.assertNotIn(3, self.sent_commands)
+
+    def test_last_hr_data_time_set_on_hr_arrival(self):
+        """process_heart_rate_data must update last_hr_data_time."""
+        controller = self._make_controller()
+        self.assertIsNone(controller.last_hr_data_time)
+        before = time.time()
+        controller.process_heart_rate_data(150)
+        self.assertIsNotNone(controller.last_hr_data_time)
+        self.assertGreaterEqual(controller.last_hr_data_time, before)
+
+
 if __name__ == '__main__':
     unittest.main()
