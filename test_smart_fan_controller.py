@@ -1651,6 +1651,118 @@ class TestHROnlyModePowerPrint(unittest.TestCase):
         self.assertEqual(controller.current_power_zone, 3)
 
 
+class TestPowerOnlyModePowerPrint(unittest.TestCase):
+    """Test that in power_only mode, process_power_data prints incoming data throttled."""
+
+    def _make_controller(self, zone_mode='power_only'):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['minimum_samples'] = 1
+        settings['buffer_seconds'] = 1
+        settings['heart_rate_zones'] = {
+            'enabled': True,
+            'max_hr': 185,
+            'resting_hr': 60,
+            'zone_mode': zone_mode,
+            'z1_max_percent': 70,
+            'z2_max_percent': 80
+        }
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings, f, indent=2)
+        f.close()
+        self._tmp = f.name
+        controller = PowerZoneController(f.name)
+        controller.ble.running = True
+        self.sent_commands = []
+        controller.ble.send_command_sync = lambda level: self.sent_commands.append(level)
+        return controller
+
+    def tearDown(self):
+        if hasattr(self, '_tmp') and os.path.exists(self._tmp):
+            os.unlink(self._tmp)
+
+    def test_power_only_prints_incoming_power_throttled(self):
+        """In power_only mode, incoming power data prints are throttled to max 1/s."""
+        controller = self._make_controller(zone_mode='power_only')
+        controller.last_power_print_time = 0  # ensure first print happens
+        with patch('builtins.print') as mock_print:
+            controller.process_power_data(200)
+            incoming_count_after_first = sum(
+                1 for c in mock_print.call_args_list
+                if 'Teljesítmény:' in str(c) and 'Átlag' not in str(c)
+            )
+            # Second call within same second should not print incoming power again
+            controller.process_power_data(200)
+            incoming_count_after_second = sum(
+                1 for c in mock_print.call_args_list
+                if 'Teljesítmény:' in str(c) and 'Átlag' not in str(c)
+            )
+            self.assertEqual(incoming_count_after_second, incoming_count_after_first)
+
+    def test_power_only_prints_teljesitmeny_format(self):
+        """In power_only mode, incoming power print uses 'Teljesítmény:' format."""
+        controller = self._make_controller(zone_mode='power_only')
+        controller.last_power_print_time = 0  # ensure print will happen
+        with patch('builtins.print') as mock_print:
+            controller.process_power_data(200)
+        printed_args = [str(c) for c in mock_print.call_args_list]
+        self.assertTrue(any('Teljesítmény:' in s for s in printed_args))
+
+    def test_power_only_prints_teljesitmeny_zona_when_zone_known(self):
+        """In power_only mode, incoming print includes zone when current_power_zone is set."""
+        controller = self._make_controller(zone_mode='power_only')
+        controller.current_power_zone = 3
+        controller.last_power_print_time = 0
+        with patch('builtins.print') as mock_print:
+            controller.process_power_data(200)
+        printed_args = [str(c) for c in mock_print.call_args_list]
+        self.assertTrue(any('Teljesítmény zóna' in s for s in printed_args))
+
+    def test_power_only_prints_teljesitmeny_without_zona_when_none(self):
+        """In power_only mode, incoming print omits zone when current_power_zone is None."""
+        controller = self._make_controller(zone_mode='power_only')
+        controller.current_power_zone = None
+        controller.last_power_print_time = 0
+        with patch('builtins.print') as mock_print:
+            controller.process_power_data(200)
+        printed_args = [str(c) for c in mock_print.call_args_list]
+        self.assertTrue(any('Teljesítmény:' in s and 'Teljesítmény zóna' not in s for s in printed_args))
+
+    def test_power_only_still_prints_atlag(self):
+        """In power_only mode, average print still appears (not throttled)."""
+        controller = self._make_controller(zone_mode='power_only')
+        controller.last_power_print_time = 0
+        with patch('builtins.print') as mock_print:
+            controller.process_power_data(200)
+        printed_args = [str(c) for c in mock_print.call_args_list]
+        self.assertTrue(any('Átlag teljesítmény' in s for s in printed_args))
+
+    def test_higher_wins_prints_incoming_power_throttled(self):
+        """In higher_wins mode, incoming power data prints are throttled to max 1/s."""
+        controller = self._make_controller(zone_mode='higher_wins')
+        controller.last_power_print_time = 0
+        with patch('builtins.print') as mock_print:
+            controller.process_power_data(200)
+            incoming_count_after_first = sum(
+                1 for c in mock_print.call_args_list
+                if 'Teljesítmény:' in str(c) and 'Átlag' not in str(c)
+            )
+            controller.process_power_data(200)
+            incoming_count_after_second = sum(
+                1 for c in mock_print.call_args_list
+                if 'Teljesítmény:' in str(c) and 'Átlag' not in str(c)
+            )
+            self.assertEqual(incoming_count_after_second, incoming_count_after_first)
+
+    def test_higher_wins_prints_teljesitmeny_format(self):
+        """In higher_wins mode, incoming power print uses 'Teljesítmény:' format."""
+        controller = self._make_controller(zone_mode='higher_wins')
+        controller.last_power_print_time = 0
+        with patch('builtins.print') as mock_print:
+            controller.process_power_data(200)
+        printed_args = [str(c) for c in mock_print.call_args_list]
+        self.assertTrue(any('Teljesítmény:' in s for s in printed_args))
+
+
 class TestPowerOnlyModeHRPrint(unittest.TestCase):
     """Test that in power_only mode, process_heart_rate_data prints throttled and sends no BLE."""
 
