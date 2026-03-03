@@ -1140,6 +1140,18 @@ class PowerZoneController:
             power = int(power)
             self.power_buffer.append(power)
 
+            # power_only és higher_wins módban a bejövő adat kiírása (throttle-ölve)
+            zone_mode = self.hr_zone_settings.get('zone_mode', 'power_only') if self.hr_zone_settings.get('enabled', False) else 'power_only'
+
+            if zone_mode != 'hr_only':
+                current_time = time.time()
+                if current_time - self.last_power_print_time >= 1.0:
+                    if self.current_power_zone is not None:
+                        print(f"Teljesítmény: {power}W | Teljesítmény zóna: {self.current_power_zone}")
+                    else:
+                        print(f"Teljesítmény: {power}W")
+                    self.last_power_print_time = current_time
+
             if len(self.power_buffer) < self.minimum_samples:
                 print(f"📊 Adatok gyűjtése: {len(self.power_buffer)}/{self.minimum_samples}")
                 return
@@ -1147,8 +1159,6 @@ class PowerZoneController:
             avg_power = sum(self.power_buffer) // len(self.power_buffer)
             new_power_zone = self.get_zone_for_power(avg_power)
             self.current_power_zone = new_power_zone
-
-            zone_mode = self.hr_zone_settings.get('zone_mode', 'power_only') if self.hr_zone_settings.get('enabled', False) else 'power_only'
 
             if zone_mode == 'hr_only':
                 current_time = time.time()
