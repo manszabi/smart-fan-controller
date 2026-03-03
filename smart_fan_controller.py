@@ -12,7 +12,7 @@ import signal
 import atexit
 from collections import deque
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 from openant.easy.node import Node
 from openant.devices import ANTPLUS_NETWORK_KEY
 from openant.devices.power_meter import PowerMeter, PowerData
