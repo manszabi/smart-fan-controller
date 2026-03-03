@@ -121,6 +121,7 @@ class BLEController:
         self.client = None
         self.device_address = None
         self.is_connected = False
+        self.auth_failed = False
         self.retry_count = 0
         self.retry_reset_time = None
         self.last_sent_command = None
@@ -246,15 +247,60 @@ class BLEController:
             if self.pin_code is not None:
                 logger.info(f"BLE PIN autentikáció folyamatban: {self.device_address}")
                 try:
-                    auth_message = f"AUTH:{self.pin_code}"
-                    await asyncio.wait_for(
-                        client.write_gatt_char(
-                            self.characteristic_uuid,
-                            auth_message.encode('utf-8')
-                        ),
-                        timeout=self.command_timeout
-                    )
-                    logger.info(f"BLE PIN elküldve: {self.device_address}")
+                    auth_event = asyncio.Event()
+                    auth_response = [None]
+
+                    def _auth_notify_callback(sender, data):
+                        response = data.decode('utf-8', errors='replace').strip()
+                        auth_response[0] = response
+                        auth_event.set()
+
+                    await client.start_notify(self.characteristic_uuid, _auth_notify_callback)
+                    try:
+                        auth_message = f"AUTH:{str(self.pin_code)}"
+                        await asyncio.wait_for(
+                            client.write_gatt_char(
+                                self.characteristic_uuid,
+                                auth_message.encode('utf-8')
+                            ),
+                            timeout=self.command_timeout
+                        )
+                        logger.info(f"BLE PIN elküldve: {self.device_address}")
+                        try:
+                            await asyncio.wait_for(auth_event.wait(), timeout=self.command_timeout)
+                        except asyncio.TimeoutError:
+                            logger.warning("BLE AUTH válasz timeout - folytatás autentikáció nélkül")
+                        else:
+                            response = auth_response[0]
+                            if response == "AUTH_OK":
+                                logger.info("BLE AUTH sikeres")
+                            elif response == "AUTH_FAIL":
+                                logger.error("BLE AUTH SIKERTELEN - rossz PIN! Ellenőrizd a settings.json 'pin_code' értékét!")
+                                try:
+                                    await client.disconnect()
+                                except Exception:
+                                    pass
+                                with self._state_lock:
+                                    self.is_connected = False
+                                    self.auth_failed = True
+                                    self.client = None
+                                return False
+                            elif response == "AUTH_LOCKED":
+                                logger.error("BLE AUTH LOCKOUT - az ESP32 ideiglenesen blokkolva! Ellenőrizd a PIN-t a settings.json-ban!")
+                                try:
+                                    await client.disconnect()
+                                except Exception:
+                                    pass
+                                with self._state_lock:
+                                    self.is_connected = False
+                                    self.auth_failed = True
+                                    self.client = None
+                                return False
+                    finally:
+                        try:
+                            await client.stop_notify(self.characteristic_uuid)
+                        except Exception:
+                            pass
                 except Exception as auth_err:
                     logger.error(f"BLE PIN küldési hiba: {auth_err} → kapcsolat bontása")
                     try:
@@ -301,6 +347,7 @@ class BLEController:
             self.is_connected = False
             self.last_sent_command = None
             self.client = None
+            self.auth_failed = False
 
     async def _disconnect_async(self):
         """Bontja a BLE kapcsolatot és felszabadítja a klienst."""
@@ -334,6 +381,10 @@ class BLEController:
         """
         with self._state_lock:
             last_cmd = self.last_sent_command
+            auth_failed = self.auth_failed
+        if auth_failed:
+            logger.error("BLE parancs elutasítva - AUTH hiba! Javítsd a PIN-t a settings.json-ban és indítsd újra!")
+            return False
         if last_cmd == level and await self._is_connected_async():
             return True
 

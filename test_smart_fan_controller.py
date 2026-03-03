@@ -824,19 +824,32 @@ class TestBLEPINSettings(unittest.TestCase):
         mock_client = MagicMock()
         mock_client.is_connected = True
 
+        notify_callbacks = []
+
         async def mock_connect():
             pass
 
-        async def mock_write_gatt_char(uuid, data):
+        async def mock_start_notify(uuid, callback):
+            notify_callbacks.append(callback)
+
+        async def mock_stop_notify(uuid):
+            pass
+
+        async def mock_disconnect():
             pass
 
         mock_client.connect = mock_connect
-        mock_client.write_gatt_char = mock_write_gatt_char
+        mock_client.start_notify = mock_start_notify
+        mock_client.stop_notify = mock_stop_notify
+        mock_client.disconnect = mock_disconnect
 
         written_calls = []
 
         async def capturing_write(uuid, data):
             written_calls.append((uuid, data))
+            # Simulate ESP32 sending AUTH_OK response via notify
+            for cb in notify_callbacks:
+                cb(None, b"AUTH_OK")
 
         mock_client.write_gatt_char = capturing_write
 
@@ -873,6 +886,12 @@ class TestBLEPINSettings(unittest.TestCase):
         async def mock_connect():
             pass
 
+        async def mock_start_notify(uuid, callback):
+            pass
+
+        async def mock_stop_notify(uuid):
+            pass
+
         async def failing_write(uuid, data):
             raise Exception("write error")
 
@@ -880,6 +899,8 @@ class TestBLEPINSettings(unittest.TestCase):
             pass
 
         mock_client.connect = mock_connect
+        mock_client.start_notify = mock_start_notify
+        mock_client.stop_notify = mock_stop_notify
         mock_client.write_gatt_char = failing_write
         mock_client.disconnect = mock_disconnect
 
@@ -896,6 +917,169 @@ class TestBLEPINSettings(unittest.TestCase):
 
         self.assertFalse(result)
         self.assertFalse(ble.is_connected)
+
+
+class TestBLEAuthResponseHandling(unittest.TestCase):
+    """Test BLE AUTH response handling (AUTH_OK, AUTH_FAIL, AUTH_LOCKED, timeout)."""
+
+    def _make_ble(self, pin_code=123456):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['pin_code'] = pin_code
+        ble = BLEController(settings)
+        ble.device_address = "AA:BB:CC:DD:EE:FF"
+        return ble
+
+    def _make_mock_client(self, auth_response_bytes=None):
+        """Build a mock BleakClient that optionally triggers a notify callback."""
+        mock_client = MagicMock()
+        mock_client.is_connected = True
+        notify_callbacks = []
+
+        async def mock_connect():
+            pass
+
+        async def mock_start_notify(uuid, callback):
+            notify_callbacks.append(callback)
+
+        async def mock_stop_notify(uuid):
+            pass
+
+        async def mock_disconnect():
+            pass
+
+        async def capturing_write(uuid, data):
+            if auth_response_bytes is not None:
+                for cb in notify_callbacks:
+                    cb(None, auth_response_bytes)
+
+        mock_client.connect = mock_connect
+        mock_client.start_notify = mock_start_notify
+        mock_client.stop_notify = mock_stop_notify
+        mock_client.disconnect = mock_disconnect
+        mock_client.write_gatt_char = capturing_write
+        return mock_client
+
+    def test_auth_ok_sets_connected(self):
+        """AUTH_OK response should result in is_connected=True and return True."""
+        import asyncio
+        ble = self._make_ble()
+        mock_client = self._make_mock_client(b"AUTH_OK")
+
+        async def run():
+            with patch('smart_fan_controller.BleakClient', return_value=mock_client):
+                return await ble._connect_async()
+
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(run())
+        finally:
+            loop.close()
+
+        self.assertTrue(result)
+        self.assertTrue(ble.is_connected)
+        self.assertFalse(ble.auth_failed)
+
+    def test_auth_fail_disconnects_and_sets_auth_failed(self):
+        """AUTH_FAIL response should disconnect, set auth_failed=True, and return False."""
+        import asyncio
+        ble = self._make_ble()
+        mock_client = self._make_mock_client(b"AUTH_FAIL")
+
+        async def run():
+            with patch('smart_fan_controller.BleakClient', return_value=mock_client):
+                return await ble._connect_async()
+
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(run())
+        finally:
+            loop.close()
+
+        self.assertFalse(result)
+        self.assertFalse(ble.is_connected)
+        self.assertTrue(ble.auth_failed)
+
+    def test_auth_locked_disconnects_and_sets_auth_failed(self):
+        """AUTH_LOCKED response should disconnect, set auth_failed=True, and return False."""
+        import asyncio
+        ble = self._make_ble()
+        mock_client = self._make_mock_client(b"AUTH_LOCKED")
+
+        async def run():
+            with patch('smart_fan_controller.BleakClient', return_value=mock_client):
+                return await ble._connect_async()
+
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(run())
+        finally:
+            loop.close()
+
+        self.assertFalse(result)
+        self.assertFalse(ble.is_connected)
+        self.assertTrue(ble.auth_failed)
+
+    def test_auth_timeout_continues_connected(self):
+        """When no AUTH response arrives within timeout, connection continues (backward compat)."""
+        import asyncio
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['ble']['pin_code'] = 123456
+        settings['ble']['command_timeout'] = 1  # short timeout for test speed
+        ble = BLEController(settings)
+        ble.device_address = "AA:BB:CC:DD:EE:FF"
+        # No auth_response_bytes → callback never called → timeout
+        mock_client = self._make_mock_client(auth_response_bytes=None)
+
+        async def run():
+            with patch('smart_fan_controller.BleakClient', return_value=mock_client):
+                return await ble._connect_async()
+
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(run())
+        finally:
+            loop.close()
+
+        self.assertTrue(result)
+        self.assertTrue(ble.is_connected)
+        self.assertFalse(ble.auth_failed)
+
+    def test_send_command_blocked_when_auth_failed(self):
+        """_send_command_async should return False immediately when auth_failed is True."""
+        import asyncio
+        ble = self._make_ble()
+        with ble._state_lock:
+            ble.auth_failed = True
+
+        async def run():
+            return await ble._send_command_async(1)
+
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(run())
+        finally:
+            loop.close()
+
+        self.assertFalse(result)
+
+    def test_on_disconnect_resets_auth_failed(self):
+        """_on_disconnect should reset auth_failed to False."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        ble = BLEController(settings)
+        with ble._state_lock:
+            ble.auth_failed = True
+            ble.is_connected = True
+
+        ble._on_disconnect(None)
+
+        self.assertFalse(ble.auth_failed)
+        self.assertFalse(ble.is_connected)
+
+    def test_auth_failed_flag_initialized_false(self):
+        """auth_failed should be False on initialization."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        ble = BLEController(settings)
+        self.assertFalse(ble.auth_failed)
 
 
 class TestHRZoneSettings(unittest.TestCase):
