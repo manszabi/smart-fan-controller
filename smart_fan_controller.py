@@ -1249,6 +1249,7 @@ class PowerZoneController:
                     self.last_hr_print_time = current_time
 
             if len(self.hr_buffer) < self.minimum_samples:
+                print(f"📊 HR adatok gyűjtése: {len(self.hr_buffer)}/{self.minimum_samples}")
                 return
             avg_hr = round(sum(self.hr_buffer) / len(self.hr_buffer))
             new_hr_zone = self.get_hr_zone(avg_hr)
