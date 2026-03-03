@@ -1878,22 +1878,24 @@ class TestHigherWinsMissingData(unittest.TestCase):
         self.assertIn(3, self.sent_commands)
 
     def test_higher_wins_no_power_prints_missing_message(self):
-        """In higher_wins with no power data, prints message about missing power."""
+        """In higher_wins with no power data, prints HR zone without Higher Wins."""
         controller = self._make_controller()
         self.assertIsNone(controller.current_power_zone)
         with patch('builtins.print') as mock_print:
             controller.process_heart_rate_data(175)
         printed_args = [str(c) for c in mock_print.call_args_list]
-        self.assertTrue(any('power adat hiányzik' in s for s in printed_args))
+        self.assertTrue(any('❤ Átlag HR' in s for s in printed_args))
+        self.assertFalse(any('Higher Wins' in s for s in printed_args))
 
     def test_higher_wins_both_data_prints_winner_zone(self):
-        """In higher_wins with both data, prints winner zone message."""
+        """In higher_wins with both data, prints combined line with Higher Wins!"""
         controller = self._make_controller()
         controller.current_power_zone = 1
+        controller.current_avg_power = 50
         with patch('builtins.print') as mock_print:
             controller.process_heart_rate_data(175)  # zone 3
         printed_args = [str(c) for c in mock_print.call_args_list]
-        self.assertTrue(any('Nyertes zóna' in s for s in printed_args))
+        self.assertTrue(any('Higher Wins' in s for s in printed_args))
 
 
 class TestStartAntplusRetry(unittest.TestCase):
@@ -2112,20 +2114,20 @@ class TestHROnlyPrintFormat(unittest.TestCase):
         self.assertTrue(any('❤ HR' in s for s in printed_args))
 
     def test_higher_wins_prints_heart_emoji_format(self):
-        """In higher_wins mode, must print '❤ HR: ...' format."""
+        """In higher_wins mode, must print '❤ Átlag HR: ...' format."""
         controller = self._make_controller('higher_wins')
         with patch('builtins.print') as mock_print:
             controller.process_heart_rate_data(175)
         printed_args = [str(c) for c in mock_print.call_args_list]
-        self.assertTrue(any('❤ HR' in s for s in printed_args))
+        self.assertTrue(any('❤ Átlag HR' in s for s in printed_args))
 
-    def test_higher_wins_does_not_print_avg_hr_format(self):
-        """In higher_wins mode, must NOT print '❤ Átlag HR' format."""
+    def test_higher_wins_prints_avg_hr_format(self):
+        """In higher_wins mode, must print '❤ Átlag HR' format (not raw '❤ HR')."""
         controller = self._make_controller('higher_wins')
         with patch('builtins.print') as mock_print:
             controller.process_heart_rate_data(175)
         printed_args = [str(c) for c in mock_print.call_args_list]
-        self.assertFalse(any('Átlag HR' in s for s in printed_args))
+        self.assertTrue(any('Átlag HR' in s for s in printed_args))
 
 
 if __name__ == '__main__':
