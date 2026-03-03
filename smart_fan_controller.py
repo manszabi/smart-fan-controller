@@ -337,7 +337,7 @@ class BLEController:
                     self.retry_reset_time = None
                 else:
                     remaining = self.RETRY_RESET_SECONDS - elapsed
-                    print(f"⏳ Újrapróbálkozás {remaining:.0f}s múlva...")
+                    logger.info(f"Újrapróbálkozás {remaining:.0f}s múlva...")
                     await asyncio.sleep(min(remaining, self.reconnect_interval))
                     return False
 
@@ -1025,7 +1025,7 @@ class PowerZoneController:
                 return False
             if power < 0:
                 return False
-            if power > 0 and power < self.min_watt:
+            if 0 < power < self.min_watt:
                 return False
             if power > self.max_watt:
                 return False
