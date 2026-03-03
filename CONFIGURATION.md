@@ -6,9 +6,10 @@
 2. [Alapbeállítások](#2-alapbeállítások)
 3. [Teljesítmény zónák](#3-teljesítmény-zónák-zone_thresholds)
 4. [BLE beállítások](#4-ble-beállítások-ble)
-5. [Szívfrekvencia zónák](#5-szívfrekvencia-zónák-heart_rate_zones)
-6. [Példa konfigurációk](#6-példa-konfigurációk)
-7. [Hibaelhárítás](#7-hibaelhárítás)
+5. [Adatforrás beállítások](#5-adatforrás-beállítások-data_source)
+6. [Szívfrekvencia zónák](#6-szívfrekvencia-zónák-heart_rate_zones)
+7. [Példa konfigurációk](#7-példa-konfigurációk)
+8. [Hibaelhárítás](#8-hibaelhárítás)
 
 ---
 
@@ -258,7 +259,110 @@ BLE PIN kód alkalmazás szintű autentikációhoz. Ha `null`, nem történik au
 
 ---
 
-## 5. Szívfrekvencia zónák (`heart_rate_zones`)
+## 5. Adatforrás beállítások (`data_source`)
+
+A `data_source` szekció határozza meg, hogy a power és HR adat honnan érkezik.
+
+### Forrás kombinációk
+
+| `power_source` | `hr_source` | Power honnan | HR honnan | ANT+ dongle kell? |
+|---|---|---|---|---|
+| `"antplus"` | `"antplus"` | ANT+ power meter | ANT+ HR öv | ✅ Igen |
+| `"antplus"` | `"ble"` | ANT+ power meter | BLE óra/öv | ✅ Igen (csak power) |
+| `"ble"` | `"antplus"` | BLE power meter | ANT+ HR öv | ✅ Igen (csak HR) |
+| `"ble"` | `"ble"` | BLE power meter | BLE óra/öv | ❌ Nem kell |
+
+### `data_source.power_source`
+| Tulajdonság | Érték |
+|-------------|-------|
+| Típus | Szöveg |
+| Érvényes értékek | `"antplus"`, `"ble"` |
+| Alapértelmezett | `"antplus"` |
+
+A teljesítmény (power) adat forrása. `"ble"` esetén a `ble_power_device_name` megadása szükséges.
+
+### `data_source.hr_source`
+| Tulajdonság | Érték |
+|-------------|-------|
+| Típus | Szöveg |
+| Érvényes értékek | `"antplus"`, `"ble"` |
+| Alapértelmezett | `"antplus"` |
+
+A szívfrekvencia (HR) adat forrása. `"ble"` esetén a `ble_hr_device_name` megadása szükséges.
+
+### `data_source.ble_power_device_name`
+| Tulajdonság | Érték |
+|-------------|-------|
+| Típus | Szöveg vagy null |
+| Alapértelmezett | null |
+
+A BLE power meter eszköz neve. Pontosan egyeznie kell azzal, ahogy az eszköz hirdeti magát. Szükséges, ha `power_source: "ble"`.
+
+### `data_source.ble_power_scan_timeout`
+| Tulajdonság | Érték |
+|-------------|-------|
+| Típus | Egész szám |
+| Érvényes tartomány | 1–60 |
+| Alapértelmezett | 10 |
+
+BLE power keresési időkorlát másodpercben.
+
+### `data_source.ble_power_reconnect_interval`
+| Tulajdonság | Érték |
+|-------------|-------|
+| Típus | Egész szám |
+| Érvényes tartomány | 1–60 |
+| Alapértelmezett | 5 |
+
+BLE power újracsatlakozási próbálkozások közötti várakozási idő másodpercben.
+
+### `data_source.ble_power_max_retries`
+| Tulajdonság | Érték |
+|-------------|-------|
+| Típus | Egész szám |
+| Érvényes tartomány | 1–100 |
+| Alapértelmezett | 10 |
+
+BLE power maximális újracsatlakozási kísérletek száma.
+
+### `data_source.ble_hr_device_name`
+| Tulajdonság | Érték |
+|-------------|-------|
+| Típus | Szöveg vagy null |
+| Alapértelmezett | null |
+
+A BLE HR eszköz neve (pl. óra, HR öv). Szükséges, ha `hr_source: "ble"`.
+
+### `data_source.ble_hr_scan_timeout`
+| Tulajdonság | Érték |
+|-------------|-------|
+| Típus | Egész szám |
+| Érvényes tartomány | 1–60 |
+| Alapértelmezett | 10 |
+
+BLE HR keresési időkorlát másodpercben.
+
+### `data_source.ble_hr_reconnect_interval`
+| Tulajdonság | Érték |
+|-------------|-------|
+| Típus | Egész szám |
+| Érvényes tartomány | 1–60 |
+| Alapértelmezett | 5 |
+
+BLE HR újracsatlakozási próbálkozások közötti várakozási idő másodpercben.
+
+### `data_source.ble_hr_max_retries`
+| Tulajdonság | Érték |
+|-------------|-------|
+| Típus | Egész szám |
+| Érvényes tartomány | 1–100 |
+| Alapértelmezett | 10 |
+
+BLE HR maximális újracsatlakozási kísérletek száma.
+
+---
+
+## 6. Szívfrekvencia zónák (`heart_rate_zones`)
 
 A HR zóna rendszer lehetővé teszi, hogy a ventilátor a szívfrekvencia alapján is vezérelje magát, nem csak a teljesítmény alapján.
 
@@ -338,9 +442,9 @@ HR Z2 zóna felső határa a `max_hr` százalékában.
 
 ---
 
-## 6. Példa konfigurációk
+## 7. Példa konfigurációk
 
-### 6.1 Alap ANT+ power meter + ESP32 ventilátor
+### 7.1 Alap ANT+ power meter + ESP32 ventilátor
 
 A legegyszerűbb konfiguráció: ANT+ power meter adatai alapján vezérli a ventilátort.
 
@@ -370,7 +474,16 @@ A legegyszerűbb konfiguráció: ANT+ power meter adatai alapján vezérli a ven
     "pin_code": null
   },
   "data_source": {
-    "primary": "antplus"
+    "power_source": "antplus",
+    "hr_source": "antplus",
+    "ble_power_device_name": null,
+    "ble_power_scan_timeout": 10,
+    "ble_power_reconnect_interval": 5,
+    "ble_power_max_retries": 10,
+    "ble_hr_device_name": null,
+    "ble_hr_scan_timeout": 10,
+    "ble_hr_reconnect_interval": 5,
+    "ble_hr_max_retries": 10
   },
   "heart_rate_zones": {
     "enabled": false,
@@ -385,7 +498,7 @@ A legegyszerűbb konfiguráció: ANT+ power meter adatai alapján vezérli a ven
 
 ---
 
-### 6.2 ANT+ power meter + HR zónák
+### 7.2 ANT+ power meter + HR zónák
 
 ANT+ power meter és szívfrekvencia alapú zónák is.
 
@@ -413,7 +526,16 @@ ANT+ power meter és szívfrekvencia alapú zónák is.
     "pin_code": null
   },
   "data_source": {
-    "primary": "antplus"
+    "power_source": "antplus",
+    "hr_source": "antplus",
+    "ble_power_device_name": null,
+    "ble_power_scan_timeout": 10,
+    "ble_power_reconnect_interval": 5,
+    "ble_power_max_retries": 10,
+    "ble_hr_device_name": null,
+    "ble_hr_scan_timeout": 10,
+    "ble_hr_reconnect_interval": 5,
+    "ble_hr_max_retries": 10
   },
   "heart_rate_zones": {
     "enabled": true,
@@ -428,7 +550,7 @@ ANT+ power meter és szívfrekvencia alapú zónák is.
 
 ---
 
-## 7. Hibaelhárítás
+## 8. Hibaelhárítás
 
 ### A program nem találja a BLE eszközt
 
