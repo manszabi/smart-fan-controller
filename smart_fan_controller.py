@@ -1289,6 +1289,7 @@ class DataSourceManager:
 
         self.running = False
         self.monitor_thread = None
+        self.antplus_thread = None
 
     def _on_antplus_found(self, device):
         """Callback: ANT+ eszköz csatlakozásakor hívódik meg.
@@ -1358,6 +1359,7 @@ class DataSourceManager:
                 daemon=True,
                 name="ANT+-Thread"
             )
+            self.antplus_thread = ant_thread
             ant_thread.start()
             print("✓ ANT+ figyelés elindítva")
             return True
@@ -1509,6 +1511,14 @@ class DataSourceManager:
         """Leállítja az ANT+ adatforrást."""
         self.running = False
 
+        try:
+            self._stop_antplus_node()
+        except Exception as e:
+            print(f"ANT+ node leállítási hiba: {e}")
+
+        if self.antplus_thread and self.antplus_thread.is_alive():
+            self.antplus_thread.join(timeout=5)
+
         if self.monitor_thread and self.monitor_thread.is_alive():
             self.monitor_thread.join(timeout=10)
 
@@ -1570,7 +1580,13 @@ def main():
     data_manager = DataSourceManager(controller.settings, controller)
     data_manager.start()
 
+    _cleaned_up = False
+
     def cleanup():
+        nonlocal _cleaned_up
+        if _cleaned_up:
+            return
+        _cleaned_up = True
         try:
             data_manager.stop()
         except Exception as e:
@@ -1604,7 +1620,7 @@ def main():
             time.sleep(1)
     except KeyboardInterrupt:
         print("\n\n🛑 Leállítás...")
-    # finally blokk ELTÁVOLÍTVA - az atexit kezeli
+        cleanup()
 
 
 if __name__ == "__main__":
