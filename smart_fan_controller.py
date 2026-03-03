@@ -241,13 +241,14 @@ class BLEController:
                 timeout=self.connection_timeout,
                 disconnected_callback=self._on_disconnect
             )
-            await self.client.connect()
+            client = self.client
+            await client.connect()
             if self.pin_code is not None:
                 logger.info(f"BLE PIN autentikáció folyamatban: {self.device_address}")
                 try:
                     auth_message = f"AUTH:{self.pin_code}"
                     await asyncio.wait_for(
-                        self.client.write_gatt_char(
+                        client.write_gatt_char(
                             self.characteristic_uuid,
                             auth_message.encode('utf-8')
                         ),
@@ -257,12 +258,12 @@ class BLEController:
                 except Exception as auth_err:
                     logger.error(f"BLE PIN küldési hiba: {auth_err} → kapcsolat bontása")
                     try:
-                        await self.client.disconnect()
+                        await client.disconnect()
                     except Exception:
                         pass
                     with self._state_lock:
                         self.is_connected = False
-                    self.client = None
+                        self.client = None
                     return False
             with self._state_lock:
                 self.is_connected = True
@@ -275,7 +276,7 @@ class BLEController:
             logger.error(f"Csatlakozási hiba: {e}")
             with self._state_lock:
                 self.is_connected = False
-            self.client = None
+                self.client = None
             return False
 
     async def _is_connected_async(self):
@@ -285,8 +286,10 @@ class BLEController:
             bool: True, ha a kliens csatlakoztatva van; False egyébként.
         """
         try:
-            if self.client:
-                return self.client.is_connected
+            with self._state_lock:
+                client = self.client
+            if client:
+                return client.is_connected
         except Exception:
             pass
         return False
@@ -297,13 +300,15 @@ class BLEController:
         with self._state_lock:
             self.is_connected = False
             self.last_sent_command = None
-        self.client = None
+            self.client = None
 
     async def _disconnect_async(self):
         """Bontja a BLE kapcsolatot és felszabadítja a klienst."""
-        if self.client:
+        with self._state_lock:
+            client = self.client
+        if client:
             try:
-                await asyncio.wait_for(self.client.disconnect(), timeout=self.DISCONNECT_TIMEOUT)
+                await asyncio.wait_for(client.disconnect(), timeout=self.DISCONNECT_TIMEOUT)
                 logger.info("BLE kapcsolat lezárva")
             except asyncio.TimeoutError:
                 logger.warning("BLE disconnect timeout")
@@ -327,7 +332,9 @@ class BLEController:
         Visszaad:
             bool: True, ha a parancs elküldése sikeres; False egyébként.
         """
-        if self.last_sent_command == level and await self._is_connected_async():
+        with self._state_lock:
+            last_cmd = self.last_sent_command
+        if last_cmd == level and await self._is_connected_async():
             return True
 
         if not await self._is_connected_async():
@@ -383,14 +390,16 @@ class BLEController:
         Visszaad:
             bool: True, ha a küldés sikeres; False egyébként.
         """
-        if not await self._is_connected_async():
+        with self._state_lock:
+            client = self.client
+        if not client or not await self._is_connected_async():
             with self._state_lock:
                 self.is_connected = False
             return False
         try:
             message = f"LEVEL:{level}"
             await asyncio.wait_for(
-                self.client.write_gatt_char(
+                client.write_gatt_char(
                     self.characteristic_uuid,
                     message.encode('utf-8')
                 ),
@@ -564,7 +573,7 @@ class PowerZoneController:
         print(f"BLE eszköz: {self.settings['ble']['device_name']}")
         pin_code = self.settings['ble'].get('pin_code', None)
         if pin_code is not None:
-            print(f"BLE PIN: {pin_code}")
+            print(f"BLE PIN: {'*' * len(str(pin_code))}")
         print(f"Power forrás: {self.settings['data_source']['power_source']}")
         print(f"HR forrás: {self.settings['data_source']['hr_source']}")
         if self.hr_zone_settings.get('enabled', False):
@@ -635,49 +644,49 @@ class PowerZoneController:
         validation_failed = False
 
         if 'ftp' in loaded_settings:
-            if isinstance(loaded_settings['ftp'], (int, float)) and 100 <= loaded_settings['ftp'] <= 500:
+            if isinstance(loaded_settings['ftp'], (int, float)) and not isinstance(loaded_settings['ftp'], bool) and 100 <= loaded_settings['ftp'] <= 500:
                 settings['ftp'] = int(loaded_settings['ftp'])
             else:
                 print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'ftp' érték: {loaded_settings['ftp']} (100-500 között kell lennie)")
                 validation_failed = True
 
         if 'min_watt' in loaded_settings:
-            if isinstance(loaded_settings['min_watt'], (int, float)) and loaded_settings['min_watt'] >= 0:
+            if isinstance(loaded_settings['min_watt'], (int, float)) and not isinstance(loaded_settings['min_watt'], bool) and loaded_settings['min_watt'] >= 0:
                 settings['min_watt'] = int(loaded_settings['min_watt'])
             else:
                 print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'min_watt' érték: {loaded_settings['min_watt']} (0 vagy nagyobb kell legyen)")
                 validation_failed = True
 
         if 'max_watt' in loaded_settings:
-            if isinstance(loaded_settings['max_watt'], (int, float)) and loaded_settings['max_watt'] > 0:
+            if isinstance(loaded_settings['max_watt'], (int, float)) and not isinstance(loaded_settings['max_watt'], bool) and loaded_settings['max_watt'] > 0:
                 settings['max_watt'] = int(loaded_settings['max_watt'])
             else:
                 print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'max_watt' érték: {loaded_settings['max_watt']} (0-nál nagyobb kell legyen)")
                 validation_failed = True
 
         if 'cooldown_seconds' in loaded_settings:
-            if isinstance(loaded_settings['cooldown_seconds'], (int, float)) and 0 <= loaded_settings['cooldown_seconds'] <= 300:
+            if isinstance(loaded_settings['cooldown_seconds'], (int, float)) and not isinstance(loaded_settings['cooldown_seconds'], bool) and 0 <= loaded_settings['cooldown_seconds'] <= 300:
                 settings['cooldown_seconds'] = int(loaded_settings['cooldown_seconds'])
             else:
                 print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'cooldown_seconds' érték: {loaded_settings['cooldown_seconds']} (0-300 között kell lennie)")
                 validation_failed = True
 
         if 'buffer_seconds' in loaded_settings:
-            if isinstance(loaded_settings['buffer_seconds'], (int, float)) and 1 <= loaded_settings['buffer_seconds'] <= 10:
+            if isinstance(loaded_settings['buffer_seconds'], (int, float)) and not isinstance(loaded_settings['buffer_seconds'], bool) and 1 <= loaded_settings['buffer_seconds'] <= 10:
                 settings['buffer_seconds'] = int(loaded_settings['buffer_seconds'])
             else:
                 print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'buffer_seconds' érték: {loaded_settings['buffer_seconds']} (1-10 között kell lennie)")
                 validation_failed = True
 
         if 'minimum_samples' in loaded_settings:
-            if isinstance(loaded_settings['minimum_samples'], (int, float)) and loaded_settings['minimum_samples'] > 0:
+            if isinstance(loaded_settings['minimum_samples'], (int, float)) and not isinstance(loaded_settings['minimum_samples'], bool) and loaded_settings['minimum_samples'] > 0:
                 settings['minimum_samples'] = int(loaded_settings['minimum_samples'])
             else:
                 print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'minimum_samples' érték: {loaded_settings['minimum_samples']} (0-nál nagyobb kell legyen)")
                 validation_failed = True
 
         if 'dropout_timeout' in loaded_settings:
-            if isinstance(loaded_settings['dropout_timeout'], (int, float)) and loaded_settings['dropout_timeout'] > 0:
+            if isinstance(loaded_settings['dropout_timeout'], (int, float)) and not isinstance(loaded_settings['dropout_timeout'], bool) and loaded_settings['dropout_timeout'] > 0:
                 settings['dropout_timeout'] = int(loaded_settings['dropout_timeout'])
             else:
                 print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'dropout_timeout' érték: {loaded_settings['dropout_timeout']} (0-nál nagyobb kell legyen)")
@@ -1079,6 +1088,7 @@ class PowerZoneController:
                     self.cooldown_active = False
                     self.pending_zone = None
                     self.power_buffer.clear()
+                    self.hr_buffer.clear()
                     send_needed = True
 
         if send_needed:
@@ -1102,13 +1112,15 @@ class PowerZoneController:
         send_zone = None
 
         # Zone increase during cooldown: cancel immediately
-        if new_zone > self.current_zone:
-            print(f"✓ Teljesítmény emelkedés: cooldown törölve (új zóna: {new_zone} >= jelenlegi: {self.current_zone})")
+        if new_zone >= self.current_zone:
             self.cooldown_active = False
             self.pending_zone = None
-            self.current_zone = new_zone
-            self.last_zone_change = current_time
-            return new_zone
+            if new_zone > self.current_zone:
+                print(f"✓ Teljesítmény emelkedés: cooldown törölve (új zóna: {new_zone} >= jelenlegi: {self.current_zone})")
+                self.current_zone = new_zone
+                self.last_zone_change = current_time
+                return new_zone
+            return None
 
         time_elapsed = current_time - self.cooldown_start_time
 
@@ -1174,8 +1186,9 @@ class PowerZoneController:
             else:
                 # Normál leállás (cooldown szükséges)
                 if self.current_zone != 0:
-                    self.cooldown_active = True
-                    self.cooldown_start_time = current_time
+                    if not self.cooldown_active:
+                        self.cooldown_active = True
+                        self.cooldown_start_time = current_time
                     self.pending_zone = 0
                     print(f"🕐 0W detektálva: cooldown indítva {self.cooldown_seconds}s (cél: 0)")
                     return False
@@ -1233,7 +1246,8 @@ class PowerZoneController:
                 print("⚠ FIGYELMEZTETÉS: Érvénytelen adat!")
                 return
 
-            self.last_data_time = time.time()
+            current_time = time.time()
+            self.last_data_time = current_time
 
             power = int(power)
             self.power_buffer.append(power)
@@ -1241,10 +1255,9 @@ class PowerZoneController:
             # power_only és higher_wins módban a bejövő adat kiírása (throttle-ölve)
             zone_mode = self.hr_zone_settings.get('zone_mode', 'power_only') if self.hr_zone_settings.get('enabled', False) else 'power_only'
             hr_is_fresh = (self.last_hr_data_time is not None and
-                           time.time() - self.last_hr_data_time < self.dropout_timeout)
+                           current_time - self.last_hr_data_time < self.dropout_timeout)
 
             if zone_mode != 'hr_only':
-                current_time = time.time()
                 if current_time - self.last_power_print_time >= self.PRINT_THROTTLE_SECONDS:
                     if zone_mode == 'higher_wins':
                         if self.current_heart_rate is not None and hr_is_fresh:
@@ -1268,7 +1281,6 @@ class PowerZoneController:
             self.current_avg_power = avg_power
 
             if zone_mode == 'hr_only':
-                current_time = time.time()
                 if current_time - self.last_power_print_time >= self.PRINT_THROTTLE_SECONDS:
                     print(f"⚡ Átlag teljesítmény: {avg_power} watt | Power zóna: {new_power_zone}")
                     self.last_power_print_time = current_time
@@ -1287,7 +1299,7 @@ class PowerZoneController:
                 cooldown_send_zone = self.check_cooldown_and_apply(new_zone)
             elif self.current_zone is None or self.should_change_zone(new_zone):
                 self.current_zone = new_zone
-                self.last_zone_change = time.time()
+                self.last_zone_change = current_time
                 zone_change_send = new_zone
 
         send_zone = cooldown_send_zone if cooldown_send_zone is not None else zone_change_send
@@ -1317,16 +1329,16 @@ class PowerZoneController:
 
         with self.state_lock:
             self.current_heart_rate = hr
-            self.last_hr_data_time = time.time()
+            current_time = time.time()
+            self.last_hr_data_time = current_time
 
             # hr_only módban az HR adat is frissítse a last_data_time-ot,
             # különben a dropout checker Z0-ra kapcsol
             zone_mode = self.hr_zone_settings.get('zone_mode', 'power_only') if self.hr_zone_settings.get('enabled', False) else 'power_only'
             if zone_mode == 'hr_only':
-                self.last_data_time = time.time()
+                self.last_data_time = current_time
 
             if not self.hr_zone_settings.get('enabled', False):
-                current_time = time.time()
                 if current_time - self.last_hr_print_time >= self.PRINT_THROTTLE_SECONDS:
                     print(f"❤ Szívfrekvencia: {hr} bpm")
                     self.last_hr_print_time = current_time
@@ -1336,7 +1348,6 @@ class PowerZoneController:
 
             # hr_only módban a bejövő adat kiírása (throttle-ölve)
             if zone_mode == 'hr_only':
-                current_time = time.time()
                 if current_time - self.last_hr_print_time >= self.PRINT_THROTTLE_SECONDS:
                     if self.current_hr_zone is not None:
                         print(f"❤ HR: {hr} bpm | HR zóna: {self.current_hr_zone}")
@@ -1353,7 +1364,6 @@ class PowerZoneController:
 
             # zone_mode already computed above – reuse instead of re-querying
             if zone_mode == 'power_only':
-                current_time = time.time()
                 if current_time - self.last_hr_zone_print_time >= self.PRINT_THROTTLE_SECONDS:
                     print(f"❤ Átlag HR: {avg_hr} bpm | HR zóna: {new_hr_zone}")
                     self.last_hr_zone_print_time = current_time
@@ -1365,7 +1375,7 @@ class PowerZoneController:
                 target_zone = new_hr_zone
             else:  # higher_wins
                 power_is_fresh = (self.last_data_time is not None and
-                                  time.time() - self.last_data_time < self.dropout_timeout)
+                                  current_time - self.last_data_time < self.dropout_timeout)
                 if self.current_power_zone is not None and self.current_avg_power is not None and power_is_fresh:
                     avg_power = self.current_avg_power
                     power_zone = self.current_power_zone
@@ -1381,7 +1391,7 @@ class PowerZoneController:
                 cooldown_send_zone = self.check_cooldown_and_apply(target_zone)
             elif self.current_zone is None or self.should_change_zone(target_zone):
                 self.current_zone = target_zone
-                self.last_zone_change = time.time()
+                self.last_zone_change = current_time
                 zone_change_send = target_zone
 
         send_zone = cooldown_send_zone if cooldown_send_zone is not None else zone_change_send
@@ -1856,12 +1866,15 @@ class DataSourceManager:
                 # Ha ide ér, az ANT+ node leállt (pl. dongle kihúzva)
                 if not self.running.is_set():
                     break
-                # Ha volt sikeres adat a futás során, reseteljük a retry_count-ot
+                # Ha volt sikeres adat a futás során, reseteljük a retry_count-ot.
+                # antplus_last_data nullázása itt történik, hogy a következő
+                # leálláskor csak akkor resetálódjon, ha újra volt adat.
                 if self.antplus_last_data > 0:
                     retry_count = 0
-                retry_count += 1
+                    self.antplus_last_data = 0
+                else:
+                    retry_count += 1
                 logger.warning(f"ANT+ node leállt, újraindítás... ({retry_count}/{self.ANTPLUS_MAX_RETRIES})")
-                self.antplus_last_data = 0
 
                 if retry_count >= self.ANTPLUS_MAX_RETRIES:
                     logger.warning(f"Max ANT+ újracsatlakozási kísérletek elérve ({self.ANTPLUS_MAX_RETRIES})! {self.ANTPLUS_MAX_RETRY_COOLDOWN}s múlva újrapróbálkozik...")
@@ -2035,7 +2048,7 @@ class DataSourceManager:
         # Stop the ANT+ node BEFORE joining the thread so the blocking
         # antplus_node.start() call is interrupted and the thread can exit.
         try:
-            self._stop_antplus_node()
+            self._stop_antplus()
         except Exception as e:
             logger.error(f"ANT+ leállítási hiba: {e}")
 
@@ -2044,11 +2057,6 @@ class DataSourceManager:
 
         if self.monitor_thread and self.monitor_thread.is_alive():
             self.monitor_thread.join(timeout=10)
-
-        try:
-            self._stop_antplus()
-        except Exception as e:
-            logger.error(f"ANT+ leállítási hiba: {e}")
 
 
 # ============================================================

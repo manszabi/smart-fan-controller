@@ -2041,6 +2041,13 @@ class TestOnDisconnectResetsLastSentCommand(unittest.TestCase):
         ble._on_disconnect(None)
         self.assertFalse(ble.is_connected)
 
+    def test_on_disconnect_sets_client_none(self):
+        """client must be None after _on_disconnect."""
+        ble = self._make_ble()
+        ble.client = MagicMock()
+        ble._on_disconnect(None)
+        self.assertIsNone(ble.client)
+
 
 class TestAntplusLoopSleepBeforeReinit(unittest.TestCase):
     """_antplus_loop must sleep 1s between _stop_antplus_node and _init_antplus_node."""
