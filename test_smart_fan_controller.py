@@ -251,7 +251,7 @@ class TestCooldownLogic(unittest.TestCase):
         f.close()
         self._tmp = f.name
         self.controller = PowerZoneController(f.name)
-        self.controller.ble.running = True  # Prevent "BLE thread not running" warning
+        self.controller.ble.running.set()  # Prevent "BLE thread not running" warning
         self.controller.current_zone = 3
 
     def tearDown(self):
@@ -335,7 +335,7 @@ class TestProcessPowerData(unittest.TestCase):
         f.close()
         self._tmp = f.name
         self.controller = PowerZoneController(f.name)
-        self.controller.ble.running = True
+        self.controller.ble.running.set()
         self.sent_commands = []
         self.controller.ble.send_command_sync = lambda level: self.sent_commands.append(level)
 
@@ -462,7 +462,7 @@ class TestDropout(unittest.TestCase):
         f.close()
         self._tmp = f.name
         self.controller = PowerZoneController(f.name)
-        self.controller.ble.running = True
+        self.controller.ble.running.set()
         self.sent_commands = []
         self.controller.ble.send_command_sync = lambda level: self.sent_commands.append(level)
 
@@ -1089,7 +1089,7 @@ class TestHRZoneControl(unittest.TestCase):
         f.close()
         self._tmp = f.name
         controller = PowerZoneController(f.name)
-        controller.ble.running = True
+        controller.ble.running.set()
         self.sent_commands = []
         controller.ble.send_command_sync = lambda level: self.sent_commands.append(level)
         return controller
@@ -1180,7 +1180,7 @@ class TestHROnlyUpdatesLastDataTime(unittest.TestCase):
         f.close()
         self._tmp = f.name
         controller = PowerZoneController(f.name)
-        controller.ble.running = True
+        controller.ble.running.set()
         controller.ble.send_command_sync = lambda level: None
         return controller
 
@@ -1215,7 +1215,7 @@ class TestCheckDropoutLocking(unittest.TestCase):
         f.close()
         self._tmp = f.name
         controller = PowerZoneController(f.name)
-        controller.ble.running = True
+        controller.ble.running.set()
         controller.ble.send_command_sync = lambda level: None
         return controller
 
@@ -1237,7 +1237,7 @@ class TestProcessHeartRateDataThreadSafety(unittest.TestCase):
         f.close()
         self._tmp = f.name
         self.controller = PowerZoneController(f.name)
-        self.controller.ble.running = True
+        self.controller.ble.running.set()
         self.sent_commands = []
         self.controller.ble.send_command_sync = lambda level: self.sent_commands.append(level)
 
@@ -1295,7 +1295,7 @@ class TestCooldownElif(unittest.TestCase):
 
     def _make_controller(self):
         controller = PowerZoneController(self._tmp)
-        controller.ble.running = True
+        controller.ble.running.set()
         controller.ble.send_command_sync = lambda level: None
         return controller
 
@@ -1454,7 +1454,8 @@ class TestAntplusLoopReconnect(unittest.TestCase):
             MockNode.return_value = mock_node_instance
 
             dsm = DataSourceManager.__new__(DataSourceManager)
-            dsm.running = True
+            dsm.running = threading.Event()
+            dsm.running.set()
             dsm.antplus_node = mock_node_instance
             dsm.antplus_last_data = 0
             dsm.ANTPLUS_MAX_RETRIES = 3
@@ -1467,7 +1468,7 @@ class TestAntplusLoopReconnect(unittest.TestCase):
             def start_side_effect():
                 call_count[0] += 1
                 if call_count[0] >= 2:
-                    dsm.running = False
+                    dsm.running.clear()
 
             mock_node_instance.start = start_side_effect
 
@@ -1491,7 +1492,8 @@ class TestAntplusLoopRetryReset(unittest.TestCase):
             MockNode.return_value = mock_node_instance
 
             dsm = DataSourceManager.__new__(DataSourceManager)
-            dsm.running = True
+            dsm.running = threading.Event()
+            dsm.running.set()
             dsm.antplus_node = mock_node_instance
             dsm.ANTPLUS_MAX_RETRIES = 5
             dsm.ANTPLUS_RECONNECT_DELAY = 0
@@ -1507,7 +1509,7 @@ class TestAntplusLoopRetryReset(unittest.TestCase):
                     dsm.antplus_last_data = time.time()
                 elif call_count[0] == 2:
                     # Stop the loop on second call
-                    dsm.running = False
+                    dsm.running.clear()
 
             mock_node_instance.start = start_side_effect
             dsm.antplus_last_data = 0
@@ -1524,7 +1526,8 @@ class TestAntplusLoopMaxRetriesReset(unittest.TestCase):
     def _make_dsm(self, mock_node_instance, max_retries=3, reconnect_delay=0):
         from smart_fan_controller import DataSourceManager
         dsm = DataSourceManager.__new__(DataSourceManager)
-        dsm.running = True
+        dsm.running = threading.Event()
+        dsm.running.set()
         dsm.antplus_node = mock_node_instance
         dsm.antplus_last_data = 0
         dsm.ANTPLUS_MAX_RETRIES = max_retries
@@ -1556,7 +1559,7 @@ class TestAntplusLoopMaxRetriesReset(unittest.TestCase):
                 if call_count[0] <= 2:
                     raise Exception("simulated ANT+ error")
                 else:
-                    dsm.running = False
+                    dsm.running.clear()
 
             mock_node_instance.start = start_side_effect
 
@@ -1590,7 +1593,7 @@ class TestAntplusLoopMaxRetriesReset(unittest.TestCase):
                 # First two calls return normally (fills up retries)
                 # After the reset, stop the loop on the next call
                 if call_count[0] > 2:
-                    dsm.running = False
+                    dsm.running.clear()
 
             mock_node_instance.start = start_side_effect
 
@@ -1624,7 +1627,7 @@ class TestHROnlyModePowerPrint(unittest.TestCase):
         f.close()
         self._tmp = f.name
         controller = PowerZoneController(f.name)
-        controller.ble.running = True
+        controller.ble.running.set()
         self.sent_commands = []
         controller.ble.send_command_sync = lambda level: self.sent_commands.append(level)
         return controller
@@ -1686,7 +1689,7 @@ class TestPowerOnlyModePowerPrint(unittest.TestCase):
         f.close()
         self._tmp = f.name
         controller = PowerZoneController(f.name)
-        controller.ble.running = True
+        controller.ble.running.set()
         self.sent_commands = []
         controller.ble.send_command_sync = lambda level: self.sent_commands.append(level)
         return controller
@@ -1798,7 +1801,7 @@ class TestPowerOnlyModeHRPrint(unittest.TestCase):
         f.close()
         self._tmp = f.name
         controller = PowerZoneController(f.name)
-        controller.ble.running = True
+        controller.ble.running.set()
         self.sent_commands = []
         controller.ble.send_command_sync = lambda level: self.sent_commands.append(level)
         return controller
@@ -1859,7 +1862,7 @@ class TestHigherWinsMissingData(unittest.TestCase):
         f.close()
         self._tmp = f.name
         controller = PowerZoneController(f.name)
-        controller.ble.running = True
+        controller.ble.running.set()
         self.sent_commands = []
         controller.ble.send_command_sync = lambda level: self.sent_commands.append(level)
         return controller
@@ -2051,7 +2054,8 @@ class TestAntplusLoopSleepBeforeReinit(unittest.TestCase):
             mock_time.time = time.time
 
             dsm = DataSourceManager.__new__(DataSourceManager)
-            dsm.running = True
+            dsm.running = threading.Event()
+            dsm.running.set()
             dsm.antplus_node = MagicMock()
             dsm.antplus_last_data = 0
             dsm.ANTPLUS_MAX_RETRIES = 3
@@ -2064,7 +2068,7 @@ class TestAntplusLoopSleepBeforeReinit(unittest.TestCase):
 
             def init_side():
                 call_order.append('init')
-                dsm.running = False
+                dsm.running.clear()
 
             dsm._stop_antplus_node = stop_side
             dsm._init_antplus_node = init_side
@@ -2103,7 +2107,7 @@ class TestHROnlyPrintFormat(unittest.TestCase):
         f.close()
         self._tmp = f.name
         controller = PowerZoneController(f.name)
-        controller.ble.running = True
+        controller.ble.running.set()
         controller.ble.send_command_sync = MagicMock()
         return controller
 
@@ -2166,7 +2170,7 @@ class TestStaleDataInHigherWins(unittest.TestCase):
         f.close()
         self._tmp = f.name
         controller = PowerZoneController(f.name)
-        controller.ble.running = True
+        controller.ble.running.set()
         self.sent_commands = []
         controller.ble.send_command_sync = lambda level: self.sent_commands.append(level)
         return controller
@@ -2442,7 +2446,7 @@ class TestBLEPowerReceiver(unittest.TestCase):
         self.assertEqual(receiver.scan_timeout, 5)
         self.assertEqual(receiver.reconnect_interval, 1)
         self.assertEqual(receiver.max_retries, 3)
-        self.assertFalse(receiver.running)
+        self.assertFalse(receiver.running.is_set())
         self.assertFalse(receiver.is_connected)
 
     def test_parse_power_8bit_flags(self):
@@ -2505,7 +2509,7 @@ class TestBLEHeartRateReceiver(unittest.TestCase):
         self.assertEqual(receiver.scan_timeout, 5)
         self.assertEqual(receiver.reconnect_interval, 1)
         self.assertEqual(receiver.max_retries, 3)
-        self.assertFalse(receiver.running)
+        self.assertFalse(receiver.running.is_set())
         self.assertFalse(receiver.is_connected)
 
     def test_parse_hr_8bit(self):
@@ -2591,7 +2595,7 @@ class TestDataSourceManagerConditionalInit(unittest.TestCase):
              patch.object(dsm, '_monitor_loop'):
             dsm.start()
             mock_ant.assert_called_once()
-        dsm.running = False
+        dsm.running.clear()
 
     def test_both_ble_no_antplus(self):
         """When both sources are ble, ANT+ should NOT be started."""
@@ -2604,7 +2608,7 @@ class TestDataSourceManagerConditionalInit(unittest.TestCase):
             MockHR.return_value = MagicMock(start=MagicMock())
             dsm.start()
             mock_ant.assert_not_called()
-        dsm.running = False
+        dsm.running.clear()
 
     def test_power_ble_hr_antplus_starts_antplus(self):
         """When power=ble, hr=antplus, ANT+ should be started for HR."""
@@ -2615,7 +2619,7 @@ class TestDataSourceManagerConditionalInit(unittest.TestCase):
             MockPower.return_value = MagicMock(start=MagicMock())
             dsm.start()
             mock_ant.assert_called_once()
-        dsm.running = False
+        dsm.running.clear()
 
     def test_power_antplus_hr_ble_starts_antplus(self):
         """When power=antplus, hr=ble, ANT+ should be started for power."""
@@ -2626,7 +2630,7 @@ class TestDataSourceManagerConditionalInit(unittest.TestCase):
             MockHR.return_value = MagicMock(start=MagicMock())
             dsm.start()
             mock_ant.assert_called_once()
-        dsm.running = False
+        dsm.running.clear()
 
     def test_init_antplus_node_power_antplus_registers_meter(self):
         """When power_source=antplus, PowerMeter should be registered."""
