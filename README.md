@@ -1,5 +1,7 @@
 # Smart Fan Controller
 
+![Version](https://img.shields.io/badge/verzió-v1.2.0-blue)
+
 ANT+ Power Meter adatokat fogad és BLE-n keresztül vezérel egy ventilátort teljesítmény zónák alapján.
 
 ## 🎯 Funkciók
@@ -10,6 +12,8 @@ ANT+ Power Meter adatokat fogad és BLE-n keresztül vezérel egy ventilátort t
 - **Cooldown logika** (zóna csökkentésnél)
 - **Dropout kezelés** (adatforrás kiesés)
 - **Szívfrekvencia zónák** (HR alapú ventilátor vezérlés ANT+ HR adatok alapján)
+- **Thread-safe BLE kommunikáció** (szálbiztos BLE vezérlés)
+- **BLE adatforrás támogatás** (power és HR BLE-n keresztül is)
 
 ## 📦 Telepítés
 
@@ -100,6 +104,11 @@ Alapértelmezetten (FTP=180W):
 - Automatikus újracsatlakozás
 - 30s türelmi idő induláskor
 
+### BLE:
+- BLE power meter támogatás
+- BLE HR eszköz (óra/öv) támogatás
+- Automatikus újracsatlakozás BLE adatforrásokhoz is
+
 ## 🐛 Hibaelhárítás
 
 ### ANT+ dongle nem található:
@@ -117,6 +126,7 @@ Alapértelmezetten (FTP=180W):
 smart_fan_controller/
 ├── smart_fan_controller.py         # Fő program
 ├── settings.json                   # Konfiguráció (személyes, nincs a repoban)
+├── settings.example.json           # Példa konfiguráció (kommentek nélkül)
 ├── settings.example.jsonc          # Példa konfiguráció (kommentekkel)
 ├── CONFIGURATION.md                # Részletes beállítási leírás
 ├── requirements.txt                # Python függőségek

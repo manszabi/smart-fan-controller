@@ -15,6 +15,8 @@
 
 ## 1. Bevezetés
 
+Aktuális verzió: v1.2.0
+
 A `settings.json` fájl a Smart Fan Controller összes beállítását tartalmazza.
 A fájl a program könyvtárában kell legyen (ott, ahol a `smart_fan_controller.py` is van).
 
@@ -256,6 +258,8 @@ A BLE GATT karakterisztika UUID-je, amelyre a `LEVEL:n` parancsok íródnak.
 | Alapértelmezett | null |
 
 BLE PIN kód alkalmazás szintű autentikációhoz. Ha `null`, nem történik autentikáció. Ha meg van adva (pl. `123456`), a BLE kapcsolat felépítése után az első üzenetként `AUTH:123456` formátumú autentikációs üzenet kerül elküldésre a GATT karakterisztikára. Az ESP32 firmware oldalon az `AUTH:<pin>` üzenetet kell ellenőrizni, mielőtt `LEVEL:X` parancsokat fogad el.
+
+**Biztonsági megjegyzés:** A PIN kód a logokban maszkolt formátumban jelenik meg (pl. `****56`), így a teljes PIN nem kerül a log fájlokba.
 
 ---
 
@@ -605,3 +609,11 @@ ANT+ power meter és szívfrekvencia alapú zónák is.
 1. Ellenőrizd, hogy az ANT+ adatforrás küld-e adatot.
 2. Növeld a `dropout_timeout` értékét, ha az adatforrás lassan indul el.
 3. Várj néhány másodpercet, amíg az ANT+ eszköz csatlakozik.
+
+---
+
+### Szálbiztosság (thread-safety)
+
+A v1.2.0 verziótól a BLE kommunikáció szálbiztos (thread-safe). A `_state_lock` védi az összes megosztott állapotot (`is_connected`, `client`, `last_sent_command`).
+
+Ha a BLE kapcsolat váratlanul megszakad, az `_on_disconnect` callback automatikusan reseteli az állapotot és felszabadítja a klienst.

@@ -132,8 +132,9 @@
     // Alapértelmezett: "0000ffe1-0000-1000-8000-00805f9b34fb"
     "characteristic_uuid": "0000ffe1-0000-1000-8000-00805f9b34fb",
 
-    // BLE PIN kód párosításhoz. Ha null, nem történik PIN-alapú párosítás.
+    // BLE PIN kód alkalmazás szintű autentikációhoz. Ha null, nem történik autentikáció.
     // Csak akkor szükséges, ha az ESP32 firmware PIN kódot igényel.
+    // A PIN a logokban maszkolt formátumban jelenik meg (pl. ****56).
     // Érvényes értékek: null, vagy 0–999999 közötti egész szám
     // Alapértelmezett: null
     "pin_code": null
