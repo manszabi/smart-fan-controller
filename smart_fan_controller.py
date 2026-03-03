@@ -1215,6 +1215,17 @@ class PowerZoneController:
                 return
 
             self.hr_buffer.append(hr)
+
+            # hr_only módban a bejövő adat kiírása (throttle-ölve)
+            if zone_mode == 'hr_only':
+                current_time = time.time()
+                if current_time - self.last_hr_print_time >= 1.0:
+                    if self.current_hr_zone is not None:
+                        print(f"❤ HR: {hr} bpm | HR zóna: {self.current_hr_zone}")
+                    else:
+                        print(f"❤ HR: {hr} bpm")
+                    self.last_hr_print_time = current_time
+
             if len(self.hr_buffer) < self.minimum_samples:
                 return
             avg_hr = sum(self.hr_buffer) // len(self.hr_buffer)
@@ -1232,7 +1243,7 @@ class PowerZoneController:
 
 
             if zone_mode == 'hr_only':
-                print(f"Átlag pulzus: {avg_hr} bpm | Pulzus zóna: {new_hr_zone}")
+                print(f"❤ Átlag HR: {avg_hr} bpm | HR zóna: {new_hr_zone}")
                 target_zone = new_hr_zone
             else:  # higher_wins
                 print(f"❤ HR: {avg_hr} bpm | HR zóna: {new_hr_zone}")

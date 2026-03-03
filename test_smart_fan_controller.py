@@ -1955,7 +1955,7 @@ class TestAntplusLoopSleepBeforeReinit(unittest.TestCase):
 
 
 class TestHROnlyPrintFormat(unittest.TestCase):
-    """hr_only mode must print 'Átlag pulzus' format; higher_wins keeps '❤ HR' format."""
+    """hr_only mode must print '❤ Átlag HR' format; higher_wins keeps '❤ HR' format."""
 
     def _make_controller(self, zone_mode):
         settings = copy.deepcopy(DEFAULT_SETTINGS)
@@ -1982,22 +1982,22 @@ class TestHROnlyPrintFormat(unittest.TestCase):
         if hasattr(self, '_tmp') and os.path.exists(self._tmp):
             os.unlink(self._tmp)
 
-    def test_hr_only_prints_avg_pulzus_format(self):
-        """In hr_only mode, must print 'Átlag pulzus: X bpm | Pulzus zóna: Y'."""
+    def test_hr_only_prints_avg_hr_format(self):
+        """In hr_only mode, must print '❤ Átlag HR: X bpm | HR zóna: Y'."""
         controller = self._make_controller('hr_only')
         with patch('builtins.print') as mock_print:
             controller.process_heart_rate_data(175)
         printed_args = [str(c) for c in mock_print.call_args_list]
-        self.assertTrue(any('Átlag pulzus' in s for s in printed_args))
-        self.assertTrue(any('Pulzus zóna' in s for s in printed_args))
+        self.assertTrue(any('Átlag HR' in s for s in printed_args))
+        self.assertTrue(any('HR zóna' in s for s in printed_args))
 
-    def test_hr_only_does_not_print_heart_emoji_format(self):
-        """In hr_only mode, must NOT print '❤ HR: ...' format."""
+    def test_hr_only_prints_incoming_hr_format(self):
+        """In hr_only mode, must print '❤ HR: X bpm' for incoming data."""
         controller = self._make_controller('hr_only')
         with patch('builtins.print') as mock_print:
             controller.process_heart_rate_data(175)
         printed_args = [str(c) for c in mock_print.call_args_list]
-        self.assertFalse(any('❤ HR' in s for s in printed_args))
+        self.assertTrue(any('❤ HR' in s for s in printed_args))
 
     def test_higher_wins_prints_heart_emoji_format(self):
         """In higher_wins mode, must print '❤ HR: ...' format."""
@@ -2007,13 +2007,13 @@ class TestHROnlyPrintFormat(unittest.TestCase):
         printed_args = [str(c) for c in mock_print.call_args_list]
         self.assertTrue(any('❤ HR' in s for s in printed_args))
 
-    def test_higher_wins_does_not_print_avg_pulzus_format(self):
-        """In higher_wins mode, must NOT print 'Átlag pulzus' format."""
+    def test_higher_wins_does_not_print_avg_hr_format(self):
+        """In higher_wins mode, must NOT print '❤ Átlag HR' format."""
         controller = self._make_controller('higher_wins')
         with patch('builtins.print') as mock_print:
             controller.process_heart_rate_data(175)
         printed_args = [str(c) for c in mock_print.call_args_list]
-        self.assertFalse(any('Átlag pulzus' in s for s in printed_args))
+        self.assertFalse(any('Átlag HR' in s for s in printed_args))
 
 
 if __name__ == '__main__':
