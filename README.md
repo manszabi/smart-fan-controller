@@ -1,6 +1,6 @@
 # Smart Fan Controller
 
-![Version](https://img.shields.io/badge/verzió-v1.2.0-blue)
+![Version](https://img.shields.io/badge/verzió-v1.3.0-blue)
 
 ANT+ Power Meter adatokat fogad és BLE-n keresztül vezérel egy ventilátort teljesítmény zónák alapján.
 
@@ -14,6 +14,7 @@ ANT+ Power Meter adatokat fogad és BLE-n keresztül vezérel egy ventilátort t
 - **Szívfrekvencia zónák** (HR alapú ventilátor vezérlés ANT+ HR adatok alapján)
 - **Thread-safe BLE kommunikáció** (szálbiztos BLE vezérlés)
 - **BLE adatforrás támogatás** (power és HR BLE-n keresztül is)
+- **Zwift UDP adatforrás támogatás** (power és HR a zwift-udp-monitor programon keresztül)
 
 ## 📦 Telepítés
 
@@ -108,6 +109,11 @@ Alapértelmezetten (FTP=180W):
 - BLE power meter támogatás
 - BLE HR eszköz (óra/öv) támogatás
 - Automatikus újracsatlakozás BLE adatforrásokhoz is
+
+### Zwift UDP:
+- A [zwift-udp-monitor](https://github.com/manszabi/zwift-udp-monitor) program szükséges
+- Zwift UDP forgalom elfogása → power/HR adat továbbítása
+- Automatikus dropout kezelés (ha a monitor leáll)
 
 ## 🐛 Hibaelhárítás
 

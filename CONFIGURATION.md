@@ -275,24 +275,27 @@ A `data_source` szekció határozza meg, hogy a power és HR adat honnan érkezi
 | `"antplus"` | `"ble"` | ANT+ power meter | BLE óra/öv | ✅ Igen (csak power) |
 | `"ble"` | `"antplus"` | BLE power meter | ANT+ HR öv | ✅ Igen (csak HR) |
 | `"ble"` | `"ble"` | BLE power meter | BLE óra/öv | ❌ Nem kell |
+| `"zwift_udp"` | `"zwift_udp"` | Zwift UDP Monitor | Zwift UDP Monitor | ❌ Nem kell |
+| `"zwift_udp"` | `"ble"` | Zwift UDP Monitor | BLE óra/öv | ❌ Nem kell |
+| `"zwift_udp"` | `"antplus"` | Zwift UDP Monitor | ANT+ HR öv | ✅ Igen (csak HR) |
 
 ### `data_source.power_source`
 | Tulajdonság | Érték |
 |-------------|-------|
 | Típus | Szöveg |
-| Érvényes értékek | `"antplus"`, `"ble"` |
+| Érvényes értékek | `"antplus"`, `"ble"`, `"zwift_udp"` |
 | Alapértelmezett | `"antplus"` |
 
-A teljesítmény (power) adat forrása. `"ble"` esetén a `ble_power_device_name` megadása szükséges.
+A teljesítmény (power) adat forrása. `"ble"` esetén a `ble_power_device_name` megadása szükséges. `"zwift_udp"` esetén a [zwift-udp-monitor](https://github.com/manszabi/zwift-udp-monitor) program szükséges.
 
 ### `data_source.hr_source`
 | Tulajdonság | Érték |
 |-------------|-------|
 | Típus | Szöveg |
-| Érvényes értékek | `"antplus"`, `"ble"` |
+| Érvényes értékek | `"antplus"`, `"ble"`, `"zwift_udp"` |
 | Alapértelmezett | `"antplus"` |
 
-A szívfrekvencia (HR) adat forrása. `"ble"` esetén a `ble_hr_device_name` megadása szükséges.
+A szívfrekvencia (HR) adat forrása. `"ble"` esetén a `ble_hr_device_name` megadása szükséges. `"zwift_udp"` esetén a [zwift-udp-monitor](https://github.com/manszabi/zwift-udp-monitor) program szükséges.
 
 ### `data_source.ble_power_device_name`
 | Tulajdonság | Érték |
@@ -363,6 +366,23 @@ BLE HR újracsatlakozási próbálkozások közötti várakozási idő másodper
 | Alapértelmezett | 10 |
 
 BLE HR maximális újracsatlakozási kísérletek száma.
+
+### `data_source.zwift_udp_port`
+| Tulajdonság | Érték |
+|-------------|-------|
+| Típus | Egész szám |
+| Érvényes tartomány | 1024–65535 |
+| Alapértelmezett | 7878 |
+
+UDP port, amelyen a Zwift UDP listener figyel. Egyeznie kell a `zwift-udp-monitor` broadcast portjával.
+
+### `data_source.zwift_udp_host`
+| Tulajdonság | Érték |
+|-------------|-------|
+| Típus | Szöveg |
+| Alapértelmezett | `"127.0.0.1"` |
+
+Listen cím – melyik hálózati interfészen figyeljen a UDP socket. Általában `"127.0.0.1"` (localhost), ha a `zwift-udp-monitor` ugyanazon a gépen fut.
 
 ---
 

@@ -10,9 +10,10 @@ import queue
 import copy
 import signal
 import atexit
+import socket
 from collections import deque
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 from openant.easy.node import Node
 from openant.devices import ANTPLUS_NETWORK_KEY
 from openant.devices.power_meter import PowerMeter, PowerData
@@ -52,8 +53,8 @@ DEFAULT_SETTINGS = {
         "pin_code": None           # BLE PIN kód alkalmazás szintű autentikációhoz (null = nincs auth, int 0–999999 vagy string pl. "007")
     },
     "data_source": {
-        "power_source": "antplus",           # Power adatforrás: "antplus" vagy "ble"
-        "hr_source": "antplus",              # HR adatforrás: "antplus" vagy "ble"
+        "power_source": "antplus",           # Power adatforrás: "antplus", "ble" vagy "zwift_udp"
+        "hr_source": "antplus",              # HR adatforrás: "antplus", "ble" vagy "zwift_udp"
         "ble_power_device_name": None,       # BLE power meter neve (szükséges ha power_source: "ble")
         "ble_power_scan_timeout": 10,        # BLE power keresési időkorlát (s, 1–60)
         "ble_power_reconnect_interval": 5,   # BLE power újracsatlakozási várakozás (s, 1–60)
@@ -62,6 +63,8 @@ DEFAULT_SETTINGS = {
         "ble_hr_scan_timeout": 10,           # BLE HR keresési időkorlát (s, 1–60)
         "ble_hr_reconnect_interval": 5,      # BLE HR újracsatlakozási várakozás (s, 1–60)
         "ble_hr_max_retries": 10,            # BLE HR maximális újracsatlakozási kísérletek (1–100)
+        "zwift_udp_port": 7878,              # UDP port amire a Zwift UDP listener figyel (1024–65535)
+        "zwift_udp_host": "127.0.0.1",       # Listen cím (localhost)
     },
     "heart_rate_zones": {
         "enabled": False,          # True: HR zóna rendszer aktív (befolyásolja a ventilátort)
@@ -844,17 +847,17 @@ class PowerZoneController:
                 ds = loaded_settings['data_source']
 
                 if 'power_source' in ds:
-                    if ds['power_source'] in ('antplus', 'ble'):
+                    if ds['power_source'] in ('antplus', 'ble', 'zwift_udp'):
                         settings['data_source']['power_source'] = ds['power_source']
                     else:
-                        print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'power_source' érték: {ds['power_source']} ('antplus' vagy 'ble' kell legyen)")
+                        print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'power_source' érték: {ds['power_source']} ('antplus', 'ble' vagy 'zwift_udp' kell legyen)")
                         validation_failed = True
 
                 if 'hr_source' in ds:
-                    if ds['hr_source'] in ('antplus', 'ble'):
+                    if ds['hr_source'] in ('antplus', 'ble', 'zwift_udp'):
                         settings['data_source']['hr_source'] = ds['hr_source']
                     else:
-                        print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'hr_source' érték: {ds['hr_source']} ('antplus' vagy 'ble' kell legyen)")
+                        print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'hr_source' érték: {ds['hr_source']} ('antplus', 'ble' vagy 'zwift_udp' kell legyen)")
                         validation_failed = True
 
                 if 'ble_power_device_name' in ds:
@@ -893,6 +896,7 @@ class PowerZoneController:
                     'ble_power_reconnect_interval', 'ble_power_max_retries',
                     'ble_hr_device_name', 'ble_hr_scan_timeout',
                     'ble_hr_reconnect_interval', 'ble_hr_max_retries',
+                    'zwift_udp_port', 'zwift_udp_host',
                 }
                 ds_unknown = set(ds.keys()) - ds_known_keys
                 if ds_unknown:
@@ -903,6 +907,22 @@ class PowerZoneController:
                     print(f"⚠ FIGYELMEZTETÉS: power_source='ble' de 'ble_power_device_name' nincs megadva!")
                 if settings['data_source']['hr_source'] == 'ble' and not settings['data_source'].get('ble_hr_device_name'):
                     print(f"⚠ FIGYELMEZTETÉS: hr_source='ble' de 'ble_hr_device_name' nincs megadva!")
+
+                # Zwift UDP port validáció
+                if 'zwift_udp_port' in ds:
+                    if isinstance(ds['zwift_udp_port'], int) and not isinstance(ds['zwift_udp_port'], bool) and 1024 <= ds['zwift_udp_port'] <= 65535:
+                        settings['data_source']['zwift_udp_port'] = ds['zwift_udp_port']
+                    else:
+                        print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'zwift_udp_port' érték: {ds['zwift_udp_port']} (1024-65535 közötti egész szám kell legyen)")
+                        validation_failed = True
+
+                # Zwift UDP host validáció
+                if 'zwift_udp_host' in ds:
+                    if isinstance(ds['zwift_udp_host'], str) and len(ds['zwift_udp_host']) > 0:
+                        settings['data_source']['zwift_udp_host'] = ds['zwift_udp_host']
+                    else:
+                        print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'zwift_udp_host' érték: {ds['zwift_udp_host']} (nem üres szöveg kell legyen)")
+                        validation_failed = True
             else:
                 print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'data_source' formátum")
                 validation_failed = True
@@ -1769,6 +1789,138 @@ class BLEHeartRateReceiver:
                 logger.info("BLE HR thread leállítva")
 
 
+# ============================================================
+# ZwiftUDPReceiver
+# ============================================================
+class ZwiftUDPReceiver:
+    """Zwift UDP adatfogadó.
+
+    A zwift-udp-monitor programból érkező JSON csomagokat fogadja UDP-n.
+    Háttérszálban fut, a bejövő power és HR adatokat validálja,
+    majd átadja a PowerZoneController-nek.
+    """
+
+    RECV_BUFFER = 4096
+    SOCKET_TIMEOUT = 2.0
+
+    def __init__(self, settings, controller):
+        ds = settings['data_source']
+        self.host = ds.get('zwift_udp_host', '127.0.0.1')
+        self.port = ds.get('zwift_udp_port', 7878)
+        self.controller = controller
+
+        self.process_power = (ds.get('power_source') == 'zwift_udp')
+        self.process_hr = (ds.get('hr_source') == 'zwift_udp' and
+                          settings.get('heart_rate_zones', {}).get('enabled', False))
+
+        self.running = threading.Event()
+        self.thread = None
+        self.last_data_time = 0
+        self._state_lock = threading.Lock()
+
+    @property
+    def has_data(self):
+        """Van-e friss adat (dropout detektáláshoz)."""
+        with self._state_lock:
+            return self.last_data_time > 0
+
+    @property
+    def last_data(self):
+        with self._state_lock:
+            return self.last_data_time
+
+    def start(self):
+        if self.running.is_set():
+            logger.warning("Zwift UDP thread már fut!")
+            return
+        self.running.set()
+        self.thread = threading.Thread(target=self._receive_loop, daemon=True, name="ZwiftUDP-Thread")
+        self.thread.start()
+        logger.info(f"Zwift UDP listener elindítva: {self.host}:{self.port}")
+
+    def _receive_loop(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.settimeout(self.SOCKET_TIMEOUT)
+        try:
+            sock.bind((self.host, self.port))
+            logger.info(f"Zwift UDP socket kötve: {self.host}:{self.port}")
+        except OSError as e:
+            logger.error(f"Zwift UDP bind hiba: {e}")
+            return
+
+        try:
+            while self.running.is_set():
+                try:
+                    raw, addr = sock.recvfrom(self.RECV_BUFFER)
+                    self._process_packet(raw)
+                except socket.timeout:
+                    continue
+                except Exception as e:
+                    if self.running.is_set():
+                        logger.warning(f"Zwift UDP fogadási hiba: {e}")
+        finally:
+            sock.close()
+            logger.info("Zwift UDP socket lezárva")
+
+    def _process_packet(self, raw):
+        """JSON csomag feldolgozása – validáció + controller értesítés.
+
+        FONTOS: Validálja a power és HR értékeket MIELŐTT átadná
+        a controllernek (pont mint az ANT+ és BLE forrásoknál).
+        Érvénytelen adatok nem kerülnek be az átlagolásba.
+        """
+        try:
+            data = json.loads(raw.decode('utf-8'))
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            logger.debug(f"Zwift UDP: érvénytelen JSON: {e}")
+            return
+
+        if not isinstance(data, dict):
+            return
+
+        had_valid_data = False
+
+        if self.process_power and 'power' in data:
+            power = data['power']
+            if isinstance(power, (int, float)) and not isinstance(power, bool):
+                power = int(power)
+                if 0 <= power <= 2500:
+                    self.controller.process_power_data(power)
+                    had_valid_data = True
+                else:
+                    logger.debug(f"Zwift UDP: power tartományon kívül: {power}")
+            else:
+                logger.debug(f"Zwift UDP: érvénytelen power típus: {type(power)}")
+
+        if self.process_hr and 'heartrate' in data:
+            hr = data['heartrate']
+            if isinstance(hr, (int, float)) and not isinstance(hr, bool):
+                hr = int(hr)
+                if 0 <= hr <= 250:
+                    self.controller.process_heart_rate_data(hr)
+                    had_valid_data = True
+                else:
+                    logger.debug(f"Zwift UDP: heartrate tartományon kívül: {hr}")
+            else:
+                logger.debug(f"Zwift UDP: érvénytelen heartrate típus: {type(hr)}")
+
+        if had_valid_data:
+            with self._state_lock:
+                self.last_data_time = time.time()
+
+    def stop(self):
+        if not self.running.is_set():
+            return
+        logger.info("Zwift UDP thread leállítása...")
+        self.running.clear()
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=5)
+            if self.thread.is_alive():
+                logger.warning("Zwift UDP thread nem állt le időben")
+            else:
+                logger.info("Zwift UDP thread leállítva")
+
 
 class DataSourceManager:
     """ANT+ adatforrás kezelője.
@@ -1802,6 +1954,7 @@ class DataSourceManager:
 
         self.ble_power_receiver = None
         self.ble_hr_receiver = None
+        self.zwift_udp_receiver = None
 
         self.running = threading.Event()
         self.monitor_thread = None
@@ -2041,6 +2194,11 @@ class DataSourceManager:
                 if hr_source == 'ble':
                     ble_hr_ok = self.ble_hr_receiver is not None and self.ble_hr_receiver.is_connected
                     parts.append(f"BLE HR: {'✓' if ble_hr_ok else '✗'}")
+                if power_source == 'zwift_udp' or hr_source == 'zwift_udp':
+                    zwift_udp_ok = (self.zwift_udp_receiver is not None and
+                                    self.zwift_udp_receiver.has_data and
+                                    (current_time - self.zwift_udp_receiver.last_data) < dropout_timeout)
+                    parts.append(f"Zwift UDP: {'✓' if zwift_udp_ok else '✗'}")
 
                 print(f"📡 Adatforrás státusz | {' | '.join(parts)}")
                 last_source_print = current_time
@@ -2051,8 +2209,9 @@ class DataSourceManager:
         Indítási sorend:
             1. BLE Power fogadó (ha power_source == 'ble')
             2. BLE HR fogadó (ha hr_source == 'ble' és HR engedélyezett)
-            3. ANT+ szál (ha legalább az egyik forrás 'antplus')
-            4. Adatforrás monitor szál
+            3. Zwift UDP fogadó (ha legalább az egyik forrás 'zwift_udp')
+            4. ANT+ szál (ha legalább az egyik forrás 'antplus')
+            5. Adatforrás monitor szál
         """
         self.running.set()
 
@@ -2069,6 +2228,11 @@ class DataSourceManager:
         if hr_source == 'ble' and hr_enabled:
             self.ble_hr_receiver = BLEHeartRateReceiver(self.settings, self.controller)
             self.ble_hr_receiver.start()
+
+        needs_zwift_udp = (power_source == 'zwift_udp') or (hr_source == 'zwift_udp' and hr_enabled)
+        if needs_zwift_udp:
+            self.zwift_udp_receiver = ZwiftUDPReceiver(self.settings, self.controller)
+            self.zwift_udp_receiver.start()
 
         needs_antplus = (power_source == 'antplus') or (hr_source == 'antplus' and hr_enabled)
         if needs_antplus:
@@ -2097,6 +2261,12 @@ class DataSourceManager:
                 self.ble_hr_receiver.stop()
             except Exception as e:
                 logger.error(f"BLE HR leállítási hiba: {e}")
+
+        if self.zwift_udp_receiver:
+            try:
+                self.zwift_udp_receiver.stop()
+            except Exception as e:
+                logger.error(f"Zwift UDP leállítási hiba: {e}")
 
         # Stop the ANT+ node BEFORE joining the thread so the blocking
         # antplus_node.start() call is interrupted and the thread can exit.

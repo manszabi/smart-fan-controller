@@ -38,6 +38,7 @@ from smart_fan_controller import (
     BLEController,
     BLEPowerReceiver,
     BLEHeartRateReceiver,
+    ZwiftUDPReceiver,
     DEFAULT_SETTINGS,
 )
 
@@ -2938,6 +2939,374 @@ class TestPowerZoneControllerHRSourcePrint(unittest.TestCase):
         self.assertIn('ble', printed.lower())
         self.assertIn('antplus', printed.lower())
 
+
+
+class TestZwiftUDPDefaultSettings(unittest.TestCase):
+    """Test that DEFAULT_SETTINGS has correct zwift_udp fields."""
+
+    def test_zwift_udp_port_default(self):
+        """zwift_udp_port should default to 7878."""
+        self.assertEqual(DEFAULT_SETTINGS['data_source']['zwift_udp_port'], 7878)
+
+    def test_zwift_udp_host_default(self):
+        """zwift_udp_host should default to '127.0.0.1'."""
+        self.assertEqual(DEFAULT_SETTINGS['data_source']['zwift_udp_host'], '127.0.0.1')
+
+
+class TestZwiftUDPValidation(unittest.TestCase):
+    """Test zwift_udp settings validation."""
+
+    def _create_settings_file(self, settings_dict):
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings_dict, f, indent=2)
+        f.close()
+        return f.name
+
+    def tearDown(self):
+        if hasattr(self, '_settings_file') and os.path.exists(self._settings_file):
+            os.unlink(self._settings_file)
+
+    def test_power_source_zwift_udp(self):
+        """power_source 'zwift_udp' should be accepted."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['power_source'] = 'zwift_udp'
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['data_source']['power_source'], 'zwift_udp')
+
+    def test_hr_source_zwift_udp(self):
+        """hr_source 'zwift_udp' should be accepted."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['hr_source'] = 'zwift_udp'
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['data_source']['hr_source'], 'zwift_udp')
+
+    def test_zwift_udp_port_valid(self):
+        """Valid zwift_udp_port (e.g. 9999) should be accepted."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['zwift_udp_port'] = 9999
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['data_source']['zwift_udp_port'], 9999)
+
+    def test_zwift_udp_port_invalid_falls_back(self):
+        """Invalid zwift_udp_port should fall back to default."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['zwift_udp_port'] = 80  # below 1024
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['data_source']['zwift_udp_port'],
+                         DEFAULT_SETTINGS['data_source']['zwift_udp_port'])
+
+    def test_zwift_udp_host_valid(self):
+        """Valid zwift_udp_host should be accepted."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['zwift_udp_host'] = '0.0.0.0'
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['data_source']['zwift_udp_host'], '0.0.0.0')
+
+    def test_zwift_udp_host_empty_falls_back(self):
+        """Empty zwift_udp_host should fall back to default."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['zwift_udp_host'] = ''
+        self._settings_file = self._create_settings_file(settings)
+        controller = PowerZoneController(self._settings_file)
+        self.assertEqual(controller.settings['data_source']['zwift_udp_host'],
+                         DEFAULT_SETTINGS['data_source']['zwift_udp_host'])
+
+
+class TestZwiftUDPReceiver(unittest.TestCase):
+    """Test ZwiftUDPReceiver packet processing and initialization."""
+
+    def _make_settings(self, power_source='zwift_udp', hr_source='zwift_udp', hr_enabled=True):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['power_source'] = power_source
+        settings['data_source']['hr_source'] = hr_source
+        settings['heart_rate_zones']['enabled'] = hr_enabled
+        return settings
+
+    def _make_controller(self, settings):
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings, f)
+        f.close()
+        controller = PowerZoneController(f.name)
+        os.unlink(f.name)
+        return controller
+
+    def test_zwift_udp_valid_power_processed(self):
+        """Valid power JSON should call process_power_data."""
+        settings = self._make_settings()
+        controller = self._make_controller(settings)
+        controller.process_power_data = MagicMock()
+        receiver = ZwiftUDPReceiver(settings, controller)
+        raw = json.dumps({"power": 245, "heartrate": 158}).encode('utf-8')
+        receiver._process_packet(raw)
+        controller.process_power_data.assert_called_once_with(245)
+
+    def test_zwift_udp_valid_hr_processed(self):
+        """Valid HR JSON should call process_heart_rate_data."""
+        settings = self._make_settings()
+        controller = self._make_controller(settings)
+        controller.process_heart_rate_data = MagicMock()
+        receiver = ZwiftUDPReceiver(settings, controller)
+        raw = json.dumps({"power": 200, "heartrate": 158}).encode('utf-8')
+        receiver._process_packet(raw)
+        controller.process_heart_rate_data.assert_called_once_with(158)
+
+    def test_zwift_udp_invalid_power_skipped(self):
+        """Negative power should not call process_power_data."""
+        settings = self._make_settings()
+        controller = self._make_controller(settings)
+        controller.process_power_data = MagicMock()
+        receiver = ZwiftUDPReceiver(settings, controller)
+        raw = json.dumps({"power": -10, "heartrate": 150}).encode('utf-8')
+        receiver._process_packet(raw)
+        controller.process_power_data.assert_not_called()
+
+    def test_zwift_udp_invalid_hr_skipped(self):
+        """Out-of-range HR should not call process_heart_rate_data."""
+        settings = self._make_settings()
+        controller = self._make_controller(settings)
+        controller.process_heart_rate_data = MagicMock()
+        receiver = ZwiftUDPReceiver(settings, controller)
+        raw = json.dumps({"power": 200, "heartrate": 999}).encode('utf-8')
+        receiver._process_packet(raw)
+        controller.process_heart_rate_data.assert_not_called()
+
+    def test_zwift_udp_invalid_json_skipped(self):
+        """Invalid JSON string should not crash."""
+        settings = self._make_settings()
+        controller = self._make_controller(settings)
+        controller.process_power_data = MagicMock()
+        receiver = ZwiftUDPReceiver(settings, controller)
+        raw = b'not valid json {'
+        receiver._process_packet(raw)  # should not raise
+        controller.process_power_data.assert_not_called()
+
+    def test_zwift_udp_power_bool_skipped(self):
+        """power: true (bool) should not call process_power_data."""
+        settings = self._make_settings()
+        controller = self._make_controller(settings)
+        controller.process_power_data = MagicMock()
+        receiver = ZwiftUDPReceiver(settings, controller)
+        raw = json.dumps({"power": True, "heartrate": 150}).encode('utf-8')
+        receiver._process_packet(raw)
+        controller.process_power_data.assert_not_called()
+
+    def test_zwift_udp_hr_bool_skipped(self):
+        """heartrate: false (bool) should not call process_heart_rate_data."""
+        settings = self._make_settings()
+        controller = self._make_controller(settings)
+        controller.process_heart_rate_data = MagicMock()
+        receiver = ZwiftUDPReceiver(settings, controller)
+        raw = json.dumps({"power": 200, "heartrate": False}).encode('utf-8')
+        receiver._process_packet(raw)
+        controller.process_heart_rate_data.assert_not_called()
+
+    def test_zwift_udp_power_out_of_range_skipped(self):
+        """power > 2500 should not call process_power_data."""
+        settings = self._make_settings()
+        controller = self._make_controller(settings)
+        controller.process_power_data = MagicMock()
+        receiver = ZwiftUDPReceiver(settings, controller)
+        raw = json.dumps({"power": 3000, "heartrate": 150}).encode('utf-8')
+        receiver._process_packet(raw)
+        controller.process_power_data.assert_not_called()
+
+    def test_zwift_udp_hr_out_of_range_skipped(self):
+        """hr > 250 should not call process_heart_rate_data."""
+        settings = self._make_settings()
+        controller = self._make_controller(settings)
+        controller.process_heart_rate_data = MagicMock()
+        receiver = ZwiftUDPReceiver(settings, controller)
+        raw = json.dumps({"power": 200, "heartrate": 300}).encode('utf-8')
+        receiver._process_packet(raw)
+        controller.process_heart_rate_data.assert_not_called()
+
+    def test_zwift_udp_power_zero_processed(self):
+        """power = 0 should be valid and call process_power_data."""
+        settings = self._make_settings()
+        controller = self._make_controller(settings)
+        controller.process_power_data = MagicMock()
+        receiver = ZwiftUDPReceiver(settings, controller)
+        raw = json.dumps({"power": 0, "heartrate": 150}).encode('utf-8')
+        receiver._process_packet(raw)
+        controller.process_power_data.assert_called_once_with(0)
+
+    def test_zwift_udp_hr_zero_processed(self):
+        """hr = 0 should be valid and call process_heart_rate_data."""
+        settings = self._make_settings()
+        controller = self._make_controller(settings)
+        controller.process_heart_rate_data = MagicMock()
+        receiver = ZwiftUDPReceiver(settings, controller)
+        raw = json.dumps({"power": 200, "heartrate": 0}).encode('utf-8')
+        receiver._process_packet(raw)
+        controller.process_heart_rate_data.assert_called_once_with(0)
+
+    def test_zwift_udp_only_power_when_configured(self):
+        """When only power_source='zwift_udp', HR should not be processed."""
+        settings = self._make_settings(power_source='zwift_udp', hr_source='antplus', hr_enabled=True)
+        controller = self._make_controller(settings)
+        controller.process_power_data = MagicMock()
+        controller.process_heart_rate_data = MagicMock()
+        receiver = ZwiftUDPReceiver(settings, controller)
+        raw = json.dumps({"power": 200, "heartrate": 150}).encode('utf-8')
+        receiver._process_packet(raw)
+        controller.process_power_data.assert_called_once_with(200)
+        controller.process_heart_rate_data.assert_not_called()
+
+    def test_zwift_udp_only_hr_when_configured(self):
+        """When only hr_source='zwift_udp', power should not be processed."""
+        settings = self._make_settings(power_source='antplus', hr_source='zwift_udp', hr_enabled=True)
+        controller = self._make_controller(settings)
+        controller.process_power_data = MagicMock()
+        controller.process_heart_rate_data = MagicMock()
+        receiver = ZwiftUDPReceiver(settings, controller)
+        raw = json.dumps({"power": 200, "heartrate": 150}).encode('utf-8')
+        receiver._process_packet(raw)
+        controller.process_power_data.assert_not_called()
+        controller.process_heart_rate_data.assert_called_once_with(150)
+
+    def test_zwift_udp_last_data_updated(self):
+        """After valid data, last_data_time should be updated."""
+        settings = self._make_settings()
+        controller = self._make_controller(settings)
+        receiver = ZwiftUDPReceiver(settings, controller)
+        self.assertEqual(receiver.last_data_time, 0)
+        raw = json.dumps({"power": 200, "heartrate": 150}).encode('utf-8')
+        receiver._process_packet(raw)
+        self.assertGreater(receiver.last_data_time, 0)
+
+    def test_zwift_udp_last_data_not_updated_on_invalid(self):
+        """After invalid-only data, last_data_time should remain 0."""
+        settings = self._make_settings()
+        controller = self._make_controller(settings)
+        receiver = ZwiftUDPReceiver(settings, controller)
+        raw = json.dumps({"power": -1, "heartrate": 999}).encode('utf-8')
+        receiver._process_packet(raw)
+        self.assertEqual(receiver.last_data_time, 0)
+
+    def test_zwift_udp_missing_key_no_crash(self):
+        """Missing 'power' or 'heartrate' key should not crash."""
+        settings = self._make_settings()
+        controller = self._make_controller(settings)
+        controller.process_power_data = MagicMock()
+        controller.process_heart_rate_data = MagicMock()
+        receiver = ZwiftUDPReceiver(settings, controller)
+        raw = json.dumps({"cadence": 90}).encode('utf-8')
+        receiver._process_packet(raw)  # should not raise
+        controller.process_power_data.assert_not_called()
+        controller.process_heart_rate_data.assert_not_called()
+
+    def test_zwift_udp_float_power_truncated(self):
+        """power: 245.7 (float) should be truncated to int(245)."""
+        settings = self._make_settings()
+        controller = self._make_controller(settings)
+        controller.process_power_data = MagicMock()
+        receiver = ZwiftUDPReceiver(settings, controller)
+        raw = json.dumps({"power": 245.7, "heartrate": 150}).encode('utf-8')
+        receiver._process_packet(raw)
+        controller.process_power_data.assert_called_once_with(245)
+
+    def test_zwift_udp_stop_not_running(self):
+        """stop() on a non-running receiver should not raise."""
+        settings = self._make_settings()
+        controller = self._make_controller(settings)
+        receiver = ZwiftUDPReceiver(settings, controller)
+        receiver.stop()  # should not raise
+
+
+class TestDataSourceManagerZwiftUDP(unittest.TestCase):
+    """Test DataSourceManager behaviour with zwift_udp source."""
+
+    def _make_dsm(self, power_source='antplus', hr_source='antplus', hr_enabled=False):
+        from smart_fan_controller import DataSourceManager
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['power_source'] = power_source
+        settings['data_source']['hr_source'] = hr_source
+        settings['heart_rate_zones']['enabled'] = hr_enabled
+
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings, f)
+        f.close()
+        controller = PowerZoneController(f.name)
+        os.unlink(f.name)
+
+        dsm = DataSourceManager(settings, controller)
+        return dsm
+
+    def test_both_zwift_udp_no_antplus(self):
+        """When both sources are zwift_udp, ANT+ should NOT be started."""
+        dsm = self._make_dsm(power_source='zwift_udp', hr_source='zwift_udp', hr_enabled=True)
+        with patch.object(dsm, '_start_antplus') as mock_ant, \
+             patch('smart_fan_controller.ZwiftUDPReceiver') as MockUDP, \
+             patch.object(dsm, '_monitor_loop'):
+            MockUDP.return_value = MagicMock(start=MagicMock())
+            dsm.start()
+            mock_ant.assert_not_called()
+        dsm.running.clear()
+
+    def test_power_zwift_udp_hr_antplus_starts_antplus(self):
+        """When power=zwift_udp, hr=antplus, ANT+ should be started for HR."""
+        dsm = self._make_dsm(power_source='zwift_udp', hr_source='antplus', hr_enabled=True)
+        with patch.object(dsm, '_start_antplus') as mock_ant, \
+             patch('smart_fan_controller.ZwiftUDPReceiver') as MockUDP, \
+             patch.object(dsm, '_monitor_loop'):
+            MockUDP.return_value = MagicMock(start=MagicMock())
+            dsm.start()
+            mock_ant.assert_called_once()
+        dsm.running.clear()
+
+    def test_power_zwift_udp_hr_ble_no_antplus(self):
+        """When power=zwift_udp, hr=ble, ANT+ should NOT be started."""
+        dsm = self._make_dsm(power_source='zwift_udp', hr_source='ble', hr_enabled=True)
+        with patch.object(dsm, '_start_antplus') as mock_ant, \
+             patch('smart_fan_controller.ZwiftUDPReceiver') as MockUDP, \
+             patch('smart_fan_controller.BLEHeartRateReceiver') as MockHR, \
+             patch.object(dsm, '_monitor_loop'):
+            MockUDP.return_value = MagicMock(start=MagicMock())
+            MockHR.return_value = MagicMock(start=MagicMock())
+            dsm.start()
+            mock_ant.assert_not_called()
+        dsm.running.clear()
+
+    def test_zwift_udp_receiver_started_when_power_source(self):
+        """power_source='zwift_udp' should start ZwiftUDPReceiver."""
+        dsm = self._make_dsm(power_source='zwift_udp', hr_source='antplus', hr_enabled=False)
+        with patch('smart_fan_controller.ZwiftUDPReceiver') as MockUDP, \
+             patch.object(dsm, '_start_antplus'), \
+             patch.object(dsm, '_monitor_loop'):
+            mock_receiver = MagicMock()
+            MockUDP.return_value = mock_receiver
+            dsm.start()
+            MockUDP.assert_called_once()
+            mock_receiver.start.assert_called_once()
+        dsm.running.clear()
+
+    def test_zwift_udp_receiver_started_when_hr_source(self):
+        """hr_source='zwift_udp' with HR enabled should start ZwiftUDPReceiver."""
+        dsm = self._make_dsm(power_source='antplus', hr_source='zwift_udp', hr_enabled=True)
+        with patch('smart_fan_controller.ZwiftUDPReceiver') as MockUDP, \
+             patch.object(dsm, '_start_antplus'), \
+             patch.object(dsm, '_monitor_loop'):
+            mock_receiver = MagicMock()
+            MockUDP.return_value = mock_receiver
+            dsm.start()
+            MockUDP.assert_called_once()
+            mock_receiver.start.assert_called_once()
+        dsm.running.clear()
+
+    def test_zwift_udp_receiver_not_started_when_antplus(self):
+        """When both sources are antplus, ZwiftUDPReceiver should NOT be started."""
+        dsm = self._make_dsm(power_source='antplus', hr_source='antplus', hr_enabled=True)
+        with patch('smart_fan_controller.ZwiftUDPReceiver') as MockUDP, \
+             patch.object(dsm, '_start_antplus'), \
+             patch.object(dsm, '_monitor_loop'):
+            dsm.start()
+            MockUDP.assert_not_called()
+        dsm.running.clear()
 
 
 if __name__ == '__main__':
