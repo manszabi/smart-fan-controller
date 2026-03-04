@@ -146,14 +146,16 @@
     // Power adatforrás: honnan jön a teljesítmény adat.
     // "antplus": ANT+ power meter (USB ANT+ dongle szükséges)
     // "ble":     BLE power meter (ble_power_device_name szükséges)
-    // Érvényes értékek: "antplus", "ble"
+    // "zwift_udp": Zwift UDP Monitor (zwift-udp-monitor program szükséges)
+    // Érvényes értékek: "antplus", "ble", "zwift_udp"
     // Alapértelmezett: "antplus"
     "power_source": "antplus",
 
     // HR (szívfrekvencia) adatforrás: honnan jön a HR adat.
     // "antplus": ANT+ HR öv (USB ANT+ dongle szükséges)
     // "ble":     BLE óra/öv (ble_hr_device_name szükséges)
-    // Érvényes értékek: "antplus", "ble"
+    // "zwift_udp": Zwift UDP Monitor (zwift-udp-monitor program szükséges)
+    // Érvényes értékek: "antplus", "ble", "zwift_udp"
     // Alapértelmezett: "antplus"
     "hr_source": "antplus",
 
@@ -195,7 +197,19 @@
     // BLE HR maximális újracsatlakozási kísérletek száma.
     // Érvényes tartomány: 1–100
     // Alapértelmezett: 10
-    "ble_hr_max_retries": 10
+    "ble_hr_max_retries": 10,
+
+    // Zwift UDP Monitor beállítások (ha power_source vagy hr_source = "zwift_udp")
+
+    // UDP port, amelyen a Zwift UDP listener figyel (a zwift-udp-monitor broadcast portja).
+    // Érvényes tartomány: 1024–65535
+    // Alapértelmezett: 7878
+    "zwift_udp_port": 7878,
+
+    // Listen cím – melyik hálózati interfészen figyeljen a UDP socket.
+    // Típus: szöveg, nem üres
+    // Alapértelmezett: "127.0.0.1"
+    "zwift_udp_host": "127.0.0.1"
   },
 
   // ---- Szívfrekvencia zóna beállítások ------------------------
