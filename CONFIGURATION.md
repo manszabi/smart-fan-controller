@@ -384,6 +384,33 @@ UDP port, amelyen a Zwift UDP listener figyel. Egyeznie kell a `zwift-udp-monito
 
 Listen cím – melyik hálózati interfészen figyeljen a UDP socket. Általában `"127.0.0.1"` (localhost), ha a `zwift-udp-monitor` ugyanazon a gépen fut.
 
+### `data_source.zwift_udp_buffer_seconds`
+| Tulajdonság | Érték |
+|-------------|-------|
+| Típus | Egész szám |
+| Érvényes tartomány | 1–60 |
+| Alapértelmezett | 10 |
+
+Átlagolási ablak mérete másodpercben Zwift UDP forrás esetén. Felülírja a globális `buffer_seconds` értéket, ha a `power_source` vagy `hr_source` = `"zwift_udp"`. Mivel a Zwift UDP adat ~5 másodpercenként érkezik, 10s ≈ 2 minta a bufferben.
+
+### `data_source.zwift_udp_minimum_samples`
+| Tulajdonság | Érték |
+|-------------|-------|
+| Típus | Egész szám |
+| Érvényes tartomány | 1–20 |
+| Alapértelmezett | 2 |
+
+Zónadöntéshez szükséges minimális minták száma Zwift UDP forrás esetén. Felülírja a globális `minimum_samples` értéket. 2 minta ≈ ~10 másodperc várakozás az első zónadöntésig.
+
+### `data_source.zwift_udp_dropout_timeout`
+| Tulajdonság | Érték |
+|-------------|-------|
+| Típus | Egész szám |
+| Érvényes tartomány | 1–120 |
+| Alapértelmezett | 15 |
+
+Adat nélküli idő másodpercben, ami után a rendszer dropout állapotot jelez Zwift UDP forrás esetén. Felülírja a globális `dropout_timeout` értéket. 15s ≈ 3× poll intervallum szünet – kellő tartalékot ad a lassabb frissítési ütemhez.
+
 ---
 
 ## 6. Szívfrekvencia zónák (`heart_rate_zones`)
