@@ -1,0 +1,68 @@
+## ⚠️ Bug: Felezés kimarad ha 0W jön már aktív cooldown közben (`zero_power_immediate=False`)
+
+### Probléma
+
+A `should_change_zone` 0W + `zero_power_immediate=False` ágában, ha a cooldown **már aktív** (pl. 3→2 cooldown fut), az `else` ág csak printel, de **nem felez**:
+
+```python
+else:
+    print(f"🕐 0W detektálva: cooldown indítva {self.cooldown_seconds}s (cél: 0)")
+```
+
+Ezután a `pending_zone = 0` beállítódik. A következő adatoknál viszont a `check_cooldown_and_apply`-ban:
+
+```python
+if new_zone != self.pending_zone and new_zone < self.current_zone:
+```
+
+Ez **FALSE** lesz, mert `new_zone=0` és `pending_zone=0` → **a felezés SOHA nem történik meg**.
+
+### Szcenárió
+
+```
+t=0s    current=3, pending=2, cooldown indul (120s)
+t=30s   0W jön → should_change_zone(0) → else ág → pending=0, NINCS felezés
+t=31s   0W jön → check_cooldown_and_apply(0) → 0 == 0 → SKIP
+...     Felezés soha nem fut le, teljes 120s cooldown marad
+```
+
+### Javítás
+
+Az `else` ágban (ahol a cooldown **már aktív** és 0W jön) vizsgálni kell a felezést, ha a `pending_zone` éppen most változott 0-ra:
+
+```python
+else:
+    # Cooldown már aktív, pending_zone változhat → felezés vizsgálat
+    old_pending = self.pending_zone
+    if old_pending != 0 and self.can_halve:
+        remaining = self.cooldown_seconds - (current_time - self.cooldown_start_time)
+        if remaining > 0:
+            new_remaining = remaining / 2
+            self.cooldown_start_time = current_time - (self.cooldown_seconds - new_remaining)
+            self.can_halve = False
+            self.can_double = True
+            print(f"🕐 Cooldown felezve: {remaining:.0f}s → {new_remaining:.0f}s (nagy zónaesés: {old_pending} → 0)")
+    print(f"🕐 0W detektálva: cooldown indítva {self.cooldown_seconds}s (cél: 0)")
+```
+
+Ehhez teszt is kell:
+
+```python
+def test_zero_power_halving_during_active_cooldown(self):
+    """0W during existing cooldown (zero_power_immediate=False) should halve remaining time."""
+    self.controller.cooldown_active = True
+    self.controller.current_zone = 3
+    self.controller.pending_zone = 2
+    self.controller.can_halve = True
+    self.controller.can_double = False
+    self.controller.zero_power_immediate = False
+    t0 = time.time()
+    self.controller.cooldown_start_time = t0 - 10  # 10s remaining
+    self.controller.should_change_zone(0)
+    self.assertEqual(self.controller.pending_zone, 0)
+    self.assertFalse(self.controller.can_halve)
+    self.assertTrue(self.controller.can_double)
+    elapsed = time.time() - self.controller.cooldown_start_time
+    remaining = self.controller.cooldown_seconds - elapsed
+    self.assertAlmostEqual(remaining, 5, delta=0.5)
+```
