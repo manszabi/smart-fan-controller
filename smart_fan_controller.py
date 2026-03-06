@@ -1399,9 +1399,10 @@ class PowerZoneController:
                     print(f"⚡ Átlag teljesítmény: {avg_power} watt | Power zóna: {new_power_zone}")
                     self.last_power_print_time = current_time
                 return
-
-            print(f"⚡ Átlag teljesítmény: {avg_power} watt | Power zóna: {new_power_zone}")
-
+                
+            if zone_mode != 'higher_wins':
+                print(f"⚡ Átlag teljesítmény: {avg_power} watt | Power zóna: {new_power_zone}")
+    
             if zone_mode == 'higher_wins' and self.current_hr_zone is not None and hr_is_fresh:
                 new_zone = max(new_power_zone, self.current_hr_zone)
             else:
