@@ -1371,18 +1371,12 @@ class PowerZoneController:
             hr_is_fresh = (self.last_hr_data_time is not None and
                            current_time - self.last_hr_data_time < self.dropout_timeout)
 
-            if zone_mode != 'hr_only':
+            if zone_mode != 'hr_only' and zone_mode != 'higher_wins':
                 if current_time - self.last_power_print_time >= self.PRINT_THROTTLE_SECONDS:
-                    if zone_mode == 'higher_wins':
-                        if self.current_heart_rate is not None and hr_is_fresh:
-                            print(f"❤ HR: {self.current_heart_rate} bpm | ⚡ Teljesítmény: {power} watt")
-                        else:
-                            print(f"⚡ Teljesítmény: {power} watt")
-                    else:  # power_only
-                        if self.current_power_zone is not None:
-                            print(f"⚡ Teljesítmény: {power} watt | Teljesítmény zóna: {self.current_power_zone}")
-                        else:
-                            print(f"⚡ Teljesítmény: {power} watt")
+                    if self.current_power_zone is not None:
+                        print(f"⚡ Teljesítmény: {power} watt | Teljesítmény zóna: {self.current_power_zone}")
+                    else:
+                        print(f"⚡ Teljesítmény: {power} watt")
                     self.last_power_print_time = current_time
 
             if len(self.power_buffer) < self.minimum_samples:
