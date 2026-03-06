@@ -1884,24 +1884,25 @@ class TestHROnlyModePowerPrint(unittest.TestCase):
         self.assertEqual(len(self.sent_commands), 0)
 
     def test_hr_only_power_data_throttled_print(self):
-        """In hr_only mode, power print is throttled to max 1 per second."""
+        """In hr_only mode, instant power print is throttled to max 1 per second."""
         controller = self._make_controller()
         with patch('builtins.print') as mock_print:
             controller.process_power_data(200)
             first_call_count = mock_print.call_count
-            # Second call within same second should not print power zone
+            # Second call within same second should not print again (throttled)
             controller.process_power_data(200)
             # print count should not increase (throttled)
             self.assertEqual(mock_print.call_count, first_call_count)
 
-    def test_hr_only_power_data_prints_power_zone(self):
-        """In hr_only mode, process_power_data prints power zone when throttle allows."""
+    def test_hr_only_power_data_prints_instant_power_no_zone(self):
+        """In hr_only mode, process_power_data prints instant power without zone."""
         controller = self._make_controller()
         controller.last_power_print_time = 0  # ensure print will happen
         with patch('builtins.print') as mock_print:
             controller.process_power_data(200)
         printed_args = [str(c) for c in mock_print.call_args_list]
-        self.assertTrue(any('Power zóna' in s for s in printed_args))
+        self.assertTrue(any('Teljesítmény:' in s for s in printed_args))
+        self.assertFalse(any('Power zóna' in s for s in printed_args))
 
     def test_hr_only_power_data_updates_current_power_zone(self):
         """In hr_only mode, process_power_data still updates current_power_zone."""
@@ -1967,14 +1968,14 @@ class TestPowerOnlyModePowerPrint(unittest.TestCase):
         self.assertTrue(any('Teljesítmény:' in s for s in printed_args))
 
     def test_power_only_prints_teljesitmeny_zona_when_zone_known(self):
-        """In power_only mode, incoming print includes zone when current_power_zone is set."""
+        """In power_only mode, incoming instant print does not include zone."""
         controller = self._make_controller(zone_mode='power_only')
         controller.current_power_zone = 3
         controller.last_power_print_time = 0
         with patch('builtins.print') as mock_print:
             controller.process_power_data(200)
         printed_args = [str(c) for c in mock_print.call_args_list]
-        self.assertTrue(any('Teljesítmény zóna' in s for s in printed_args))
+        self.assertFalse(any('Teljesítmény zóna' in s for s in printed_args))
 
     def test_power_only_prints_teljesitmeny_without_zona_when_none(self):
         """In power_only mode, incoming print omits zone when current_power_zone is None."""
@@ -1995,31 +1996,24 @@ class TestPowerOnlyModePowerPrint(unittest.TestCase):
         printed_args = [str(c) for c in mock_print.call_args_list]
         self.assertTrue(any('Átlag teljesítmény' in s for s in printed_args))
 
-    def test_higher_wins_prints_incoming_power_throttled(self):
-        """In higher_wins mode, incoming power data prints are throttled to max 1/s."""
-        controller = self._make_controller(zone_mode='higher_wins')
-        controller.last_power_print_time = 0
-        with patch('builtins.print') as mock_print:
-            controller.process_power_data(200)
-            incoming_count_after_first = sum(
-                1 for c in mock_print.call_args_list
-                if 'Teljesítmény:' in str(c) and 'Átlag' not in str(c)
-            )
-            controller.process_power_data(200)
-            incoming_count_after_second = sum(
-                1 for c in mock_print.call_args_list
-                if 'Teljesítmény:' in str(c) and 'Átlag' not in str(c)
-            )
-            self.assertEqual(incoming_count_after_second, incoming_count_after_first)
-
-    def test_higher_wins_prints_teljesitmeny_format(self):
-        """In higher_wins mode, incoming power print uses 'Teljesítmény:' format."""
+    def test_higher_wins_no_instant_power_print(self):
+        """In higher_wins mode, incoming power data should NOT be printed (no instant print)."""
         controller = self._make_controller(zone_mode='higher_wins')
         controller.last_power_print_time = 0
         with patch('builtins.print') as mock_print:
             controller.process_power_data(200)
         printed_args = [str(c) for c in mock_print.call_args_list]
-        self.assertTrue(any('Teljesítmény:' in s for s in printed_args))
+        # No instant 'Teljesítmény: X watt' (without 'Átlag') should appear
+        self.assertFalse(any('Teljesítmény:' in s and 'Átlag' not in s for s in printed_args))
+
+    def test_higher_wins_no_hr_prints_avg_power_with_higher_wins(self):
+        """In higher_wins mode with no HR data, avg power print includes 'Higher Wins!'."""
+        controller = self._make_controller(zone_mode='higher_wins')
+        self.assertIsNone(controller.current_hr_zone)
+        with patch('builtins.print') as mock_print:
+            controller.process_power_data(200)
+        printed_args = [str(c) for c in mock_print.call_args_list]
+        self.assertTrue(any('Átlag teljesítmény' in s and 'Higher Wins' in s for s in printed_args))
 
 
 class TestPowerOnlyModeHRPrint(unittest.TestCase):
@@ -2058,23 +2052,24 @@ class TestPowerOnlyModeHRPrint(unittest.TestCase):
         self.assertEqual(len(self.sent_commands), 0)
 
     def test_power_only_hr_data_throttled_print(self):
-        """In power_only mode, HR zone print is throttled to max 1 per second."""
+        """In power_only mode, instant HR print is throttled to max 1 per second."""
         controller = self._make_controller()
         with patch('builtins.print') as mock_print:
             controller.process_heart_rate_data(175)
             first_call_count = mock_print.call_count
-            # Second call within same second should not print HR zone
+            # Second call within same second should not print HR again
             controller.process_heart_rate_data(175)
             self.assertEqual(mock_print.call_count, first_call_count)
 
-    def test_power_only_hr_data_prints_hr_zone(self):
-        """In power_only mode, process_heart_rate_data prints HR zone when throttle allows."""
+    def test_power_only_hr_data_prints_instant_hr_no_zone(self):
+        """In power_only mode, process_heart_rate_data prints instant HR without zone."""
         controller = self._make_controller()
         controller.last_hr_zone_print_time = 0  # ensure print will happen
         with patch('builtins.print') as mock_print:
             controller.process_heart_rate_data(175)
         printed_args = [str(c) for c in mock_print.call_args_list]
-        self.assertTrue(any('HR zóna' in s for s in printed_args))
+        self.assertTrue(any('❤ HR:' in s for s in printed_args))
+        self.assertFalse(any('HR zóna' in s for s in printed_args))
 
     def test_power_only_hr_data_updates_current_hr_zone(self):
         """In power_only mode, process_heart_rate_data still updates current_hr_zone."""
@@ -2136,15 +2131,15 @@ class TestHigherWinsMissingData(unittest.TestCase):
         controller.process_heart_rate_data(175)  # zone 3
         self.assertIn(3, self.sent_commands)
 
-    def test_higher_wins_no_power_prints_missing_message(self):
-        """In higher_wins with no power data, prints HR zone without Higher Wins."""
+    def test_higher_wins_no_power_prints_hr_with_higher_wins(self):
+        """In higher_wins with no power data, prints HR avg with Higher Wins!"""
         controller = self._make_controller()
         self.assertIsNone(controller.current_power_zone)
         with patch('builtins.print') as mock_print:
             controller.process_heart_rate_data(175)
         printed_args = [str(c) for c in mock_print.call_args_list]
         self.assertTrue(any('❤ Átlag HR' in s for s in printed_args))
-        self.assertFalse(any('Higher Wins' in s for s in printed_args))
+        self.assertTrue(any('Higher Wins' in s for s in printed_args))
 
     def test_higher_wins_both_data_prints_winner_zone(self):
         """In higher_wins with both data, prints combined line with Higher Wins!"""
@@ -2440,8 +2435,8 @@ class TestStaleDataInHigherWins(unittest.TestCase):
         # Should NOT include HR data in the throttled print
         self.assertFalse(any('❤ HR:' in s and 'bpm' in s for s in printed_args))
 
-    def test_fresh_hr_shown_in_power_print(self):
-        """In higher_wins, if HR sensor is active, power print MUST show fresh HR."""
+    def test_higher_wins_no_instant_power_print_in_higher_wins_mode(self):
+        """In higher_wins, power print must NOT show instant power (no 'Teljesítmény: X watt')."""
         controller = self._make_controller()
         # Receive HR data, last_hr_data_time is fresh (set by process_heart_rate_data)
         controller.process_heart_rate_data(150)
@@ -2449,7 +2444,8 @@ class TestStaleDataInHigherWins(unittest.TestCase):
         with patch('builtins.print') as mock_print:
             controller.process_power_data(200)
         printed_args = [str(c) for c in mock_print.call_args_list]
-        self.assertTrue(any('❤ HR:' in s and 'bpm' in s for s in printed_args))
+        # In higher_wins mode, instant power print should NOT appear
+        self.assertFalse(any('Teljesítmény:' in s and 'Átlag' not in s for s in printed_args))
 
     def test_stale_hr_zone_not_used_in_power_zone_decision(self):
         """In higher_wins, if HR sensor dropped out, stale hr_zone must not influence zone decision."""
@@ -2462,8 +2458,8 @@ class TestStaleDataInHigherWins(unittest.TestCase):
         self.assertIn(1, self.sent_commands)
         self.assertNotIn(3, self.sent_commands)
 
-    def test_stale_power_not_shown_in_hr_print(self):
-        """In higher_wins, if power meter dropped out, HR print must NOT show Higher Wins."""
+    def test_stale_power_not_shown_in_hr_combined_line(self):
+        """In higher_wins, if power meter dropped out, HR-only print shows Higher Wins! without power data."""
         controller = self._make_controller()
         # Receive power data, then simulate power dropout
         controller.process_power_data(200)
@@ -2471,7 +2467,9 @@ class TestStaleDataInHigherWins(unittest.TestCase):
         with patch('builtins.print') as mock_print:
             controller.process_heart_rate_data(175)
         printed_args = [str(c) for c in mock_print.call_args_list]
-        self.assertFalse(any('Higher Wins' in s for s in printed_args))
+        # Should say Higher Wins (HR alone controls the fan) but NOT include power avg
+        self.assertTrue(any('Higher Wins' in s for s in printed_args))
+        self.assertFalse(any('Átlag teljesítmény' in s for s in printed_args))
 
     def test_stale_power_zone_not_used_in_hr_zone_decision(self):
         """In higher_wins, if power meter dropped out, stale power_zone must not influence zone decision."""

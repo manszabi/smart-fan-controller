@@ -1366,17 +1366,14 @@ class PowerZoneController:
             power = int(power)
             self.power_buffer.append(power)
 
-            # power_only és higher_wins módban a bejövő adat kiírása (throttle-ölve)
+            # minden módban (kivéve higher_wins) a bejövő adat kiírása (throttle-ölve, zóna nélkül)
             zone_mode = self.hr_zone_settings.get('zone_mode', 'power_only') if self.hr_zone_settings.get('enabled', False) else 'power_only'
             hr_is_fresh = (self.last_hr_data_time is not None and
                            current_time - self.last_hr_data_time < self.dropout_timeout)
 
-            if zone_mode != 'hr_only' and zone_mode != 'higher_wins':
+            if zone_mode != 'higher_wins':
                 if current_time - self.last_power_print_time >= self.PRINT_THROTTLE_SECONDS:
-                    if self.current_power_zone is not None:
-                        print(f"⚡ Teljesítmény: {power} watt | Teljesítmény zóna: {self.current_power_zone}")
-                    else:
-                        print(f"⚡ Teljesítmény: {power} watt")
+                    print(f"⚡ Teljesítmény: {power} watt")
                     self.last_power_print_time = current_time
 
             if len(self.power_buffer) < self.minimum_samples:
@@ -1389,17 +1386,18 @@ class PowerZoneController:
             self.current_avg_power = avg_power
 
             if zone_mode == 'hr_only':
-                if current_time - self.last_power_print_time >= self.PRINT_THROTTLE_SECONDS:
-                    print(f"⚡ Átlag teljesítmény: {avg_power} watt | Power zóna: {new_power_zone}")
-                    self.last_power_print_time = current_time
-                return
-                
-            if zone_mode != 'higher_wins':
-                print(f"⚡ Átlag teljesítmény: {avg_power} watt | Power zóna: {new_power_zone}")
-    
-            if zone_mode == 'higher_wins' and self.current_hr_zone is not None and hr_is_fresh:
-                new_zone = max(new_power_zone, self.current_hr_zone)
+                return  # nincs átlag power kiírás, nincs zónaváltás
+
+            if zone_mode == 'higher_wins':
+                if self.current_hr_zone is None or not hr_is_fresh:
+                    # HR nem elérhető/friss, power egyedül vezérli a ventilátort
+                    print(f"⚡ Átlag teljesítmény: {avg_power} watt | Power zóna: {new_power_zone} | Higher Wins!")
+                    new_zone = new_power_zone
+                else:
+                    # HR elérhető, a combined sor a process_heart_rate_data-ból jön
+                    new_zone = max(new_power_zone, self.current_hr_zone)
             else:
+                print(f"⚡ Átlag teljesítmény: {avg_power} watt | Power zóna: {new_power_zone}")
                 new_zone = new_power_zone
 
             cooldown_send_zone = None
@@ -1455,13 +1453,10 @@ class PowerZoneController:
 
             self.hr_buffer.append(hr)
 
-            # hr_only módban a bejövő adat kiírása (throttle-ölve)
-            if zone_mode == 'hr_only':
+            # hr_only és power_only módban a bejövő adat kiírása (throttle-ölve, zóna nélkül)
+            if zone_mode in ('hr_only', 'power_only'):
                 if current_time - self.last_hr_print_time >= self.PRINT_THROTTLE_SECONDS:
-                    if self.current_hr_zone is not None:
-                        print(f"❤ HR: {hr} bpm | HR zóna: {self.current_hr_zone}")
-                    else:
-                        print(f"❤ HR: {hr} bpm")
+                    print(f"❤ HR: {hr} bpm")
                     self.last_hr_print_time = current_time
 
             if len(self.hr_buffer) < self.minimum_samples:
@@ -1473,10 +1468,7 @@ class PowerZoneController:
 
             # zone_mode already computed above – reuse instead of re-querying
             if zone_mode == 'power_only':
-                if current_time - self.last_hr_zone_print_time >= self.PRINT_THROTTLE_SECONDS:
-                    print(f"❤ Átlag HR: {avg_hr} bpm | HR zóna: {new_hr_zone}")
-                    self.last_hr_zone_print_time = current_time
-                return
+                return  # nincs átlag HR kiírás, nincs zónaváltás
 
 
             if zone_mode == 'hr_only':
@@ -1492,7 +1484,7 @@ class PowerZoneController:
                     print(f"⚡ Átlag teljesítmény: {avg_power} watt | Power zóna: {power_zone} | ❤ Átlag HR: {avg_hr} bpm | HR zóna: {new_hr_zone} | Higher Wins!")
                 else:
                     target_zone = new_hr_zone
-                    print(f"❤ Átlag HR: {avg_hr} bpm | HR zóna: {new_hr_zone}")
+                    print(f"❤ Átlag HR: {avg_hr} bpm | HR zóna: {new_hr_zone} | Higher Wins!")
 
             cooldown_send_zone = None
             zone_change_send = None
