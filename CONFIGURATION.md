@@ -15,7 +15,7 @@
 
 ## 1. Bevezetés
 
-Aktuális verzió: v1.2.0
+Aktuális verzió: v1.3.0
 
 A `settings.json` fájl a Smart Fan Controller összes beállítását tartalmazza.
 A fájl a program könyvtárában kell legyen (ott, ahol a `smart_fan_controller.py` is van).
@@ -259,7 +259,7 @@ A BLE GATT karakterisztika UUID-je, amelyre a `LEVEL:n` parancsok íródnak.
 
 BLE PIN kód alkalmazás szintű autentikációhoz. Ha `null`, nem történik autentikáció. Ha meg van adva (pl. `123456` vagy `"007"`), a BLE kapcsolat felépítése után az első üzenetként `AUTH:123456` ill. `AUTH:007` formátumú autentikációs üzenet kerül elküldésre a GATT karakterisztikára. Az ESP32 firmware oldalon az `AUTH:<pin>` üzenetet kell ellenőrizni, mielőtt `LEVEL:X` parancsokat fogad el. A szöveges formátum (pl. `"007"`) lehetővé teszi a leading zerók megőrzését, így pontosan egyezhet az ESP32-n beállított `BLE_AUTH_PIN` értékkel.
 
-**Biztonsági megjegyzés:** A PIN kód a logokban maszkolt formátumban jelenik meg (pl. `****56`), így a teljes PIN nem kerül a log fájlokba.
+**Biztonsági megjegyzés:** A PIN kód induláskor a konzolon teljesen maszkolt formában jelenik meg: a PIN hosszával egyező számú csillag karakterként (pl. `******` 6 jegyű PIN esetén), így a tényleges PIN értéke nem kerül a kimenetre.
 
 ---
 

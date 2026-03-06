@@ -209,7 +209,25 @@
     // Listen cím – melyik hálózati interfészen figyeljen a UDP socket.
     // Típus: szöveg, nem üres
     // Alapértelmezett: "127.0.0.1"
-    "zwift_udp_host": "127.0.0.1"
+    "zwift_udp_host": "127.0.0.1",
+
+    // Átlagolási ablak mérete másodpercben Zwift UDP forrás esetén.
+    // Felülírja a globális buffer_seconds értéket ha power_source vagy hr_source = "zwift_udp".
+    // Érvényes tartomány: 1–60
+    // Alapértelmezett: 10
+    "zwift_udp_buffer_seconds": 10,
+
+    // Zónadöntéshez szükséges minimális minták száma Zwift UDP forrás esetén.
+    // Felülírja a globális minimum_samples értéket.
+    // Érvényes tartomány: 1–20
+    // Alapértelmezett: 2
+    "zwift_udp_minimum_samples": 2,
+
+    // Dropout timeout másodpercben Zwift UDP forrás esetén.
+    // Felülírja a globális dropout_timeout értéket.
+    // Érvényes tartomány: 1–120
+    // Alapértelmezett: 15
+    "zwift_udp_dropout_timeout": 15
   },
 
   // ---- Szívfrekvencia zóna beállítások ------------------------
