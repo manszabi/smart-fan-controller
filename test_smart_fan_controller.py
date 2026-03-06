@@ -450,6 +450,250 @@ class TestCheckCooldownAndApply(unittest.TestCase):
         self.assertTrue(self.controller.cooldown_active)
 
 
+class TestAdaptiveCooldown(unittest.TestCase):
+    """Test adaptive cooldown halving and doubling logic."""
+
+    def setUp(self):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['cooldown_seconds'] = 20
+        settings['minimum_samples'] = 1
+        settings['buffer_seconds'] = 1
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings, f, indent=2)
+        f.close()
+        self._tmp = f.name
+        self.controller = PowerZoneController(f.name)
+        self.controller.current_zone = 3
+        self.controller.cooldown_active = True
+        self.controller.pending_zone = 2
+        self.controller.can_halve = True
+        self.controller.can_double = False
+        # Start cooldown with 10s remaining (10s elapsed of 20s total)
+        self.controller.cooldown_start_time = time.time() - 10
+
+    def tearDown(self):
+        if os.path.exists(self._tmp):
+            os.unlink(self._tmp)
+
+    def test_halving_trigger_pending_zone_to_zero(self):
+        """Test 1: pending_zone drops to 0 → remaining time is halved."""
+        # 10s elapsed, 10s remaining → after halving: 5s remaining
+        t0 = time.time()
+        self.controller.cooldown_start_time = t0 - 10
+        self.controller.check_cooldown_and_apply(0)
+        self.assertEqual(self.controller.pending_zone, 0)
+        # New remaining ≈ 5s: cooldown_start_time should be ~(t0 - 15)
+        new_elapsed = time.time() - self.controller.cooldown_start_time
+        new_remaining = self.controller.cooldown_seconds - new_elapsed
+        self.assertAlmostEqual(new_remaining, 5, delta=0.5)
+
+    def test_halving_trigger_large_zone_drop(self):
+        """Test 2: current_zone - pending_zone >= 2 → remaining time is halved."""
+        # current_zone=3, new pending=1 → drop of 2 → halving
+        t0 = time.time()
+        self.controller.cooldown_start_time = t0 - 10
+        self.controller.check_cooldown_and_apply(1)
+        new_elapsed = time.time() - self.controller.cooldown_start_time
+        new_remaining = self.controller.cooldown_seconds - new_elapsed
+        self.assertAlmostEqual(new_remaining, 5, delta=0.5)
+
+    def test_doubling_trigger_pending_zone_increases(self):
+        """Test 3: pending_zone increases → remaining time is doubled (capped at cooldown_seconds)."""
+        # Set pending_zone=1, can_double=True; now pending_zone increases to 2
+        self.controller.pending_zone = 1
+        self.controller.can_halve = False
+        self.controller.can_double = True
+        t0 = time.time()
+        # 10s elapsed, 10s remaining → after doubling: min(20, 20)=20s remaining
+        self.controller.cooldown_start_time = t0 - 10
+        self.controller.check_cooldown_and_apply(2)
+        new_elapsed = time.time() - self.controller.cooldown_start_time
+        new_remaining = self.controller.cooldown_seconds - new_elapsed
+        self.assertAlmostEqual(new_remaining, 20, delta=0.5)
+
+    def test_no_second_halving_after_halving(self):
+        """Test 4: After halving, can_halve=False → second halving does not occur."""
+        t0 = time.time()
+        self.controller.cooldown_start_time = t0 - 10
+        # First halving (drop to zone 0): ~10s remaining → ~5s remaining
+        self.controller.check_cooldown_and_apply(0)
+        self.assertFalse(self.controller.can_halve)
+        start_after_first_halve = self.controller.cooldown_start_time
+
+        # Try to halve again (still zone 0, but can_halve is now False)
+        # Need a different zone so pending_zone update triggers
+        self.controller.pending_zone = 1  # reset so a change is detected
+        self.controller.check_cooldown_and_apply(0)
+        # cooldown_start_time should NOT have changed (no second halving)
+        self.assertEqual(self.controller.cooldown_start_time, start_after_first_halve)
+
+    def test_no_second_doubling_after_doubling(self):
+        """Test 5: After doubling, can_double=False → second doubling does not occur."""
+        self.controller.pending_zone = 1
+        self.controller.can_halve = False
+        self.controller.can_double = True
+        t0 = time.time()
+        self.controller.cooldown_start_time = t0 - 10
+        # First doubling (pending zone 1 → 2)
+        self.controller.check_cooldown_and_apply(2)
+        self.assertFalse(self.controller.can_double)
+        start_after_first_double = self.controller.cooldown_start_time
+
+        # Try to double again: pending_zone goes from 2 to 3, but can_double=False
+        self.controller.check_cooldown_and_apply(3)
+        # No doubling should occur since new_zone=3 >= current_zone=3 → cooldown cancelled
+        # Let's test with pending_zone=2, new_zone=3 but current_zone stays at 3
+        # Actually new_zone=3 >= current_zone=3 cancels cooldown; use new_zone=2
+        # Reset and try: pending 2→2 (no change) then pending 2→3 would cancel cooldown
+        # Better: test that doubling doesn't happen when can_double=False
+        self.controller.cooldown_active = True
+        self.controller.current_zone = 3
+        self.controller.pending_zone = 1
+        self.controller.can_double = False
+        self.controller.cooldown_start_time = t0 - 5
+        start_no_double = self.controller.cooldown_start_time
+        self.controller.check_cooldown_and_apply(2)
+        self.assertEqual(self.controller.cooldown_start_time, start_no_double)
+
+    def test_halving_enables_doubling(self):
+        """Test 6: After halving, can_double=True."""
+        t0 = time.time()
+        self.controller.cooldown_start_time = t0 - 10
+        self.controller.check_cooldown_and_apply(0)
+        self.assertTrue(self.controller.can_double)
+
+    def test_doubling_enables_halving(self):
+        """Test 7: After doubling, can_halve=True."""
+        self.controller.pending_zone = 1
+        self.controller.can_halve = False
+        self.controller.can_double = True
+        t0 = time.time()
+        self.controller.cooldown_start_time = t0 - 10
+        self.controller.check_cooldown_and_apply(2)
+        self.assertTrue(self.controller.can_halve)
+
+    def test_doubling_capped_at_cooldown_seconds(self):
+        """Test 8: Doubling cannot exceed cooldown_seconds (remaining*2 > cooldown_seconds is capped)."""
+        # Only 2s elapsed (18s remaining) → 18*2=36 > 20 → capped at 20
+        self.controller.pending_zone = 1
+        self.controller.can_halve = False
+        self.controller.can_double = True
+        t0 = time.time()
+        self.controller.cooldown_start_time = t0 - 2
+        self.controller.check_cooldown_and_apply(2)
+        new_elapsed = time.time() - self.controller.cooldown_start_time
+        new_remaining = self.controller.cooldown_seconds - new_elapsed
+        self.assertAlmostEqual(new_remaining, 20, delta=0.5)
+
+    def test_cooldown_start_resets_can_halve_can_double(self):
+        """Test 9: On cooldown start, can_halve=True, can_double=False."""
+        self.controller.cooldown_active = False
+        self.controller.current_zone = 2
+        self.controller.can_halve = False
+        self.controller.can_double = True
+        # Start a small drop (2→1, drop=1 < 2, no immediate halving)
+        self.controller.should_change_zone(1)
+        # drop < 2 → can_halve=True, can_double=False (reset on cooldown start)
+        self.assertTrue(self.controller.can_halve)
+        self.assertFalse(self.controller.can_double)
+
+    def test_halving_doubling_mutually_exclusive(self):
+        """Test 10: Halving and doubling never happen simultaneously (elif structure)."""
+        # Set up: pending_zone goes from 1 to 0 (both a drop AND it's 0)
+        # Only halving should happen
+        self.controller.pending_zone = 1
+        self.controller.can_halve = True
+        self.controller.can_double = True  # force both enabled to test mutual exclusion
+        t0 = time.time()
+        self.controller.cooldown_start_time = t0 - 10
+        # new_zone=0: old_pending=1, new_zone=0 < old_pending → NOT an increase
+        # → goes to elif branch → halving only
+        self.controller.check_cooldown_and_apply(0)
+        # Halving happened: can_halve=False, can_double=True
+        self.assertFalse(self.controller.can_halve)
+        self.assertTrue(self.controller.can_double)
+        # Remaining should be halved (not doubled)
+        new_elapsed = time.time() - self.controller.cooldown_start_time
+        new_remaining = self.controller.cooldown_seconds - new_elapsed
+        self.assertAlmostEqual(new_remaining, 5, delta=0.5)
+
+    def test_small_zone_drop_no_halving(self):
+        """Test 11: Small drop (current-pending=1, pending!=0) → no halving."""
+        # current_zone=3, new pending=2: drop=1 < 2, pending!=0 → no halving
+        self.controller.pending_zone = 3  # previous pending, to allow change
+        t0 = time.time()
+        self.controller.cooldown_start_time = t0 - 10
+        start_time = self.controller.cooldown_start_time
+        self.controller.check_cooldown_and_apply(2)
+        # cooldown_start_time should NOT have changed
+        self.assertEqual(self.controller.cooldown_start_time, start_time)
+
+    def test_cooldown_expires_correctly_after_halving(self):
+        """Test 12: Cooldown expires at correct time after halving."""
+        t0 = time.time()
+        # 10s elapsed, 10s remaining → after halving: 5s remaining
+        self.controller.cooldown_start_time = t0 - 10
+        self.controller.check_cooldown_and_apply(0)
+        # Now simulate 5+ more seconds: cooldown should expire
+        self.controller.cooldown_start_time -= 6  # simulate 6 more seconds passed
+        result = self.controller.check_cooldown_and_apply(0)
+        self.assertIsNotNone(result)
+        self.assertFalse(self.controller.cooldown_active)
+
+    def test_cooldown_cancel_on_zone_increase(self):
+        """Test 13: Zone increase cancels cooldown; state is properly reset."""
+        # Zone increase should cancel cooldown (existing behavior still works)
+        self.controller.can_halve = False
+        self.controller.can_double = True
+        result = self.controller.check_cooldown_and_apply(3)  # same as current
+        self.assertFalse(self.controller.cooldown_active)
+        self.assertIsNone(self.controller.pending_zone)
+
+    def test_immediate_halving_at_cooldown_start_big_drop(self):
+        """Test 14: At cooldown start, big drop (e.g. 3→1) causes immediate halving."""
+        self.controller.cooldown_active = False
+        self.controller.current_zone = 3
+        # Drop of 2 (3-1=2 >= 2) → immediate halving at start
+        self.controller.should_change_zone(1)
+        self.assertTrue(self.controller.cooldown_active)
+        # can_halve should be False (already halved), can_double should be True
+        self.assertFalse(self.controller.can_halve)
+        self.assertTrue(self.controller.can_double)
+        # Remaining should be ~10s (half of 20s)
+        elapsed = time.time() - self.controller.cooldown_start_time
+        remaining = self.controller.cooldown_seconds - elapsed
+        self.assertAlmostEqual(remaining, 10, delta=0.5)
+
+    def test_immediate_halving_at_cooldown_start_zero_power(self):
+        """Test 14b: At cooldown start with 0W, immediate halving occurs."""
+        self.controller.cooldown_active = False
+        self.controller.current_zone = 2
+        self.controller.zero_power_immediate = False
+        # 0W → starts cooldown with immediate halving
+        self.controller.should_change_zone(0)
+        self.assertTrue(self.controller.cooldown_active)
+        self.assertFalse(self.controller.can_halve)
+        self.assertTrue(self.controller.can_double)
+        # Remaining should be ~10s (half of 20s)
+        elapsed = time.time() - self.controller.cooldown_start_time
+        remaining = self.controller.cooldown_seconds - elapsed
+        self.assertAlmostEqual(remaining, 10, delta=0.5)
+
+    def test_no_halving_at_cooldown_start_small_drop(self):
+        """No immediate halving when drop < 2 at cooldown start."""
+        self.controller.cooldown_active = False
+        self.controller.current_zone = 2
+        # Drop of 1 (2-1=1 < 2, and new_zone != 0) → no immediate halving
+        self.controller.should_change_zone(1)
+        self.assertTrue(self.controller.cooldown_active)
+        self.assertTrue(self.controller.can_halve)
+        self.assertFalse(self.controller.can_double)
+        # Remaining should be ~20s (full cooldown)
+        elapsed = time.time() - self.controller.cooldown_start_time
+        remaining = self.controller.cooldown_seconds - elapsed
+        self.assertAlmostEqual(remaining, 20, delta=0.5)
+
+
 class TestDropout(unittest.TestCase):
     """Test data source dropout detection."""
 
