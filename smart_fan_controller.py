@@ -65,6 +65,9 @@ DEFAULT_SETTINGS = {
         "ble_hr_max_retries": 10,            # BLE HR maximális újracsatlakozási kísérletek (1–100)
         "zwift_udp_port": 7878,              # UDP port amire a Zwift UDP listener figyel (1024–65535)
         "zwift_udp_host": "127.0.0.1",       # Listen cím (localhost)
+        "zwift_udp_buffer_seconds": 10,      # Átlagolási ablak Zwift UDP forrás esetén (1–60)
+        "zwift_udp_minimum_samples": 2,      # Zónadöntéshez szükséges minimum minták Zwift UDP esetén (1–20)
+        "zwift_udp_dropout_timeout": 15,     # Dropout timeout Zwift UDP forrás esetén (1–120)
     },
     "heart_rate_zones": {
         "enabled": False,          # True: HR zóna rendszer aktív (befolyásolja a ventilátort)
@@ -584,6 +587,14 @@ class PowerZoneController:
         self.zone_thresholds = self.settings['zone_thresholds']
         self.hr_zone_settings = self.settings.get('heart_rate_zones', copy.deepcopy(DEFAULT_SETTINGS['heart_rate_zones']))
 
+        ds = self.settings.get('data_source', {})
+        uses_zwift_udp = (ds.get('power_source') == 'zwift_udp' or
+                          ds.get('hr_source') == 'zwift_udp')
+        if uses_zwift_udp:
+            self.buffer_seconds = ds.get('zwift_udp_buffer_seconds', 10)
+            self.minimum_samples = ds.get('zwift_udp_minimum_samples', 2)
+            self.dropout_timeout = ds.get('zwift_udp_dropout_timeout', 15)
+
         self.zones = self.calculate_zones()
 
         self.current_zone = None
@@ -630,6 +641,8 @@ class PowerZoneController:
             print(f"BLE PIN: {'*' * len(str(pin_code))}")
         print(f"Power forrás: {self.settings['data_source']['power_source']}")
         print(f"HR forrás: {self.settings['data_source']['hr_source']}")
+        if uses_zwift_udp:
+            print(f"🔄 Zwift UDP mód: buffer={self.buffer_seconds}s, min_samples={self.minimum_samples}, dropout={self.dropout_timeout}s")
         if self.hr_zone_settings.get('enabled', False):
             hr_z = self.hr_zones
             print(f"HR zóna mód: {self.hr_zone_settings.get('zone_mode', 'power_only')}")
@@ -890,6 +903,33 @@ class PowerZoneController:
                             print(f"⚠ FIGYELMEZTETÉS: Érvénytelen '{field}' érték: {ds[field]} (1-{max_val} között kell lennie)")
                             validation_failed = True
 
+                if 'zwift_udp_buffer_seconds' in ds:
+                    if isinstance(ds['zwift_udp_buffer_seconds'], int) and not isinstance(ds['zwift_udp_buffer_seconds'], bool) and 1 <= ds['zwift_udp_buffer_seconds'] <= 60:
+                        settings['data_source']['zwift_udp_buffer_seconds'] = ds['zwift_udp_buffer_seconds']
+                    else:
+                        print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'zwift_udp_buffer_seconds' érték: {ds['zwift_udp_buffer_seconds']} (1-60 közötti egész szám kell legyen)")
+                        validation_failed = True
+
+                if 'zwift_udp_minimum_samples' in ds:
+                    if isinstance(ds['zwift_udp_minimum_samples'], int) and not isinstance(ds['zwift_udp_minimum_samples'], bool) and 1 <= ds['zwift_udp_minimum_samples'] <= 20:
+                        settings['data_source']['zwift_udp_minimum_samples'] = ds['zwift_udp_minimum_samples']
+                    else:
+                        print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'zwift_udp_minimum_samples' érték: {ds['zwift_udp_minimum_samples']} (1-20 közötti egész szám kell legyen)")
+                        validation_failed = True
+
+                if 'zwift_udp_dropout_timeout' in ds:
+                    if isinstance(ds['zwift_udp_dropout_timeout'], int) and not isinstance(ds['zwift_udp_dropout_timeout'], bool) and 1 <= ds['zwift_udp_dropout_timeout'] <= 120:
+                        settings['data_source']['zwift_udp_dropout_timeout'] = ds['zwift_udp_dropout_timeout']
+                    else:
+                        print(f"⚠ FIGYELMEZTETÉS: Érvénytelen 'zwift_udp_dropout_timeout' érték: {ds['zwift_udp_dropout_timeout']} (1-120 közötti egész szám kell legyen)")
+                        validation_failed = True
+
+                zwift_buf_size = settings['data_source']['zwift_udp_buffer_seconds'] * self.BUFFER_RATE_HZ
+                if settings['data_source']['zwift_udp_minimum_samples'] > zwift_buf_size:
+                    print(f"⚠ FIGYELMEZTETÉS: 'zwift_udp_minimum_samples' ({settings['data_source']['zwift_udp_minimum_samples']}) nagyobb mint Zwift UDP buffer méret ({zwift_buf_size})!")
+                    settings['data_source']['zwift_udp_minimum_samples'] = zwift_buf_size
+                    validation_failed = True
+
                 ds_known_keys = {
                     'power_source', 'hr_source',
                     'ble_power_device_name', 'ble_power_scan_timeout',
@@ -897,6 +937,7 @@ class PowerZoneController:
                     'ble_hr_device_name', 'ble_hr_scan_timeout',
                     'ble_hr_reconnect_interval', 'ble_hr_max_retries',
                     'zwift_udp_port', 'zwift_udp_host',
+                    'zwift_udp_buffer_seconds', 'zwift_udp_minimum_samples', 'zwift_udp_dropout_timeout',
                 }
                 ds_unknown = set(ds.keys()) - ds_known_keys
                 if ds_unknown:

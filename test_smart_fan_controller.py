@@ -3309,5 +3309,336 @@ class TestDataSourceManagerZwiftUDP(unittest.TestCase):
         dsm.running.clear()
 
 
+class TestZwiftUDPSpecificSettings(unittest.TestCase):
+    """Tests for Zwift UDP-specific buffer_seconds, minimum_samples, dropout_timeout settings."""
+
+    def _create_settings_file(self, settings_dict):
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(settings_dict, f, indent=2)
+        f.close()
+        self._settings_file = f.name
+        return f.name
+
+    def tearDown(self):
+        if hasattr(self, '_settings_file') and os.path.exists(self._settings_file):
+            os.unlink(self._settings_file)
+
+    # --- Default values ---
+
+    def test_zwift_udp_buffer_seconds_default(self):
+        """zwift_udp_buffer_seconds should default to 10."""
+        self.assertEqual(DEFAULT_SETTINGS['data_source']['zwift_udp_buffer_seconds'], 10)
+
+    def test_zwift_udp_minimum_samples_default(self):
+        """zwift_udp_minimum_samples should default to 2."""
+        self.assertEqual(DEFAULT_SETTINGS['data_source']['zwift_udp_minimum_samples'], 2)
+
+    def test_zwift_udp_dropout_timeout_default(self):
+        """zwift_udp_dropout_timeout should default to 15."""
+        self.assertEqual(DEFAULT_SETTINGS['data_source']['zwift_udp_dropout_timeout'], 15)
+
+    # --- Validation: zwift_udp_buffer_seconds ---
+
+    def test_zwift_udp_buffer_seconds_valid(self):
+        """Valid zwift_udp_buffer_seconds should be accepted."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['zwift_udp_buffer_seconds'] = 30
+        controller = PowerZoneController(self._create_settings_file(settings))
+        self.assertEqual(controller.settings['data_source']['zwift_udp_buffer_seconds'], 30)
+
+    def test_zwift_udp_buffer_seconds_too_low_falls_back(self):
+        """zwift_udp_buffer_seconds = 0 should fall back to default."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['zwift_udp_buffer_seconds'] = 0
+        controller = PowerZoneController(self._create_settings_file(settings))
+        self.assertEqual(controller.settings['data_source']['zwift_udp_buffer_seconds'],
+                         DEFAULT_SETTINGS['data_source']['zwift_udp_buffer_seconds'])
+
+    def test_zwift_udp_buffer_seconds_too_high_falls_back(self):
+        """zwift_udp_buffer_seconds = 61 should fall back to default."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['zwift_udp_buffer_seconds'] = 61
+        controller = PowerZoneController(self._create_settings_file(settings))
+        self.assertEqual(controller.settings['data_source']['zwift_udp_buffer_seconds'],
+                         DEFAULT_SETTINGS['data_source']['zwift_udp_buffer_seconds'])
+
+    def test_zwift_udp_buffer_seconds_boundary_low(self):
+        """zwift_udp_buffer_seconds = 1 (min) should be accepted."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['zwift_udp_buffer_seconds'] = 1
+        controller = PowerZoneController(self._create_settings_file(settings))
+        self.assertEqual(controller.settings['data_source']['zwift_udp_buffer_seconds'], 1)
+
+    def test_zwift_udp_buffer_seconds_boundary_high(self):
+        """zwift_udp_buffer_seconds = 60 (max) should be accepted."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['zwift_udp_buffer_seconds'] = 60
+        controller = PowerZoneController(self._create_settings_file(settings))
+        self.assertEqual(controller.settings['data_source']['zwift_udp_buffer_seconds'], 60)
+
+    # --- Validation: zwift_udp_minimum_samples ---
+
+    def test_zwift_udp_minimum_samples_valid(self):
+        """Valid zwift_udp_minimum_samples should be accepted."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['zwift_udp_minimum_samples'] = 5
+        controller = PowerZoneController(self._create_settings_file(settings))
+        self.assertEqual(controller.settings['data_source']['zwift_udp_minimum_samples'], 5)
+
+    def test_zwift_udp_minimum_samples_too_low_falls_back(self):
+        """zwift_udp_minimum_samples = 0 should fall back to default."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['zwift_udp_minimum_samples'] = 0
+        controller = PowerZoneController(self._create_settings_file(settings))
+        self.assertEqual(controller.settings['data_source']['zwift_udp_minimum_samples'],
+                         DEFAULT_SETTINGS['data_source']['zwift_udp_minimum_samples'])
+
+    def test_zwift_udp_minimum_samples_too_high_falls_back(self):
+        """zwift_udp_minimum_samples = 21 should fall back to default."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['zwift_udp_minimum_samples'] = 21
+        controller = PowerZoneController(self._create_settings_file(settings))
+        self.assertEqual(controller.settings['data_source']['zwift_udp_minimum_samples'],
+                         DEFAULT_SETTINGS['data_source']['zwift_udp_minimum_samples'])
+
+    def test_zwift_udp_minimum_samples_boundary_low(self):
+        """zwift_udp_minimum_samples = 1 (min) should be accepted."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['zwift_udp_minimum_samples'] = 1
+        controller = PowerZoneController(self._create_settings_file(settings))
+        self.assertEqual(controller.settings['data_source']['zwift_udp_minimum_samples'], 1)
+
+    def test_zwift_udp_minimum_samples_boundary_high(self):
+        """zwift_udp_minimum_samples = 20 (max) should be accepted."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['zwift_udp_minimum_samples'] = 20
+        # Ensure buffer is large enough to avoid cross-validation clamp
+        settings['data_source']['zwift_udp_buffer_seconds'] = 60
+        controller = PowerZoneController(self._create_settings_file(settings))
+        self.assertEqual(controller.settings['data_source']['zwift_udp_minimum_samples'], 20)
+
+    # --- Validation: zwift_udp_dropout_timeout ---
+
+    def test_zwift_udp_dropout_timeout_valid(self):
+        """Valid zwift_udp_dropout_timeout should be accepted."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['zwift_udp_dropout_timeout'] = 30
+        controller = PowerZoneController(self._create_settings_file(settings))
+        self.assertEqual(controller.settings['data_source']['zwift_udp_dropout_timeout'], 30)
+
+    def test_zwift_udp_dropout_timeout_too_low_falls_back(self):
+        """zwift_udp_dropout_timeout = 0 should fall back to default."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['zwift_udp_dropout_timeout'] = 0
+        controller = PowerZoneController(self._create_settings_file(settings))
+        self.assertEqual(controller.settings['data_source']['zwift_udp_dropout_timeout'],
+                         DEFAULT_SETTINGS['data_source']['zwift_udp_dropout_timeout'])
+
+    def test_zwift_udp_dropout_timeout_too_high_falls_back(self):
+        """zwift_udp_dropout_timeout = 121 should fall back to default."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['zwift_udp_dropout_timeout'] = 121
+        controller = PowerZoneController(self._create_settings_file(settings))
+        self.assertEqual(controller.settings['data_source']['zwift_udp_dropout_timeout'],
+                         DEFAULT_SETTINGS['data_source']['zwift_udp_dropout_timeout'])
+
+    def test_zwift_udp_dropout_timeout_boundary_low(self):
+        """zwift_udp_dropout_timeout = 1 (min) should be accepted."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['zwift_udp_dropout_timeout'] = 1
+        controller = PowerZoneController(self._create_settings_file(settings))
+        self.assertEqual(controller.settings['data_source']['zwift_udp_dropout_timeout'], 1)
+
+    def test_zwift_udp_dropout_timeout_boundary_high(self):
+        """zwift_udp_dropout_timeout = 120 (max) should be accepted."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['zwift_udp_dropout_timeout'] = 120
+        controller = PowerZoneController(self._create_settings_file(settings))
+        self.assertEqual(controller.settings['data_source']['zwift_udp_dropout_timeout'], 120)
+
+    # --- Override logic: power_source='zwift_udp' ---
+
+    def test_zwift_udp_power_source_overrides_buffer_seconds(self):
+        """When power_source='zwift_udp', controller.buffer_seconds uses zwift_udp_buffer_seconds."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['power_source'] = 'zwift_udp'
+        settings['data_source']['zwift_udp_buffer_seconds'] = 20
+        controller = PowerZoneController(self._create_settings_file(settings))
+        self.assertEqual(controller.buffer_seconds, 20)
+
+    def test_zwift_udp_power_source_overrides_minimum_samples(self):
+        """When power_source='zwift_udp', controller.minimum_samples uses zwift_udp_minimum_samples."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['power_source'] = 'zwift_udp'
+        settings['data_source']['zwift_udp_minimum_samples'] = 3
+        controller = PowerZoneController(self._create_settings_file(settings))
+        self.assertEqual(controller.minimum_samples, 3)
+
+    def test_zwift_udp_power_source_overrides_dropout_timeout(self):
+        """When power_source='zwift_udp', controller.dropout_timeout uses zwift_udp_dropout_timeout."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['power_source'] = 'zwift_udp'
+        settings['data_source']['zwift_udp_dropout_timeout'] = 20
+        controller = PowerZoneController(self._create_settings_file(settings))
+        self.assertEqual(controller.dropout_timeout, 20)
+
+    def test_zwift_udp_hr_source_overrides_settings(self):
+        """When hr_source='zwift_udp', controller uses zwift_udp_* values."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['hr_source'] = 'zwift_udp'
+        settings['data_source']['zwift_udp_buffer_seconds'] = 15
+        settings['data_source']['zwift_udp_minimum_samples'] = 3
+        settings['data_source']['zwift_udp_dropout_timeout'] = 25
+        controller = PowerZoneController(self._create_settings_file(settings))
+        self.assertEqual(controller.buffer_seconds, 15)
+        self.assertEqual(controller.minimum_samples, 3)
+        self.assertEqual(controller.dropout_timeout, 25)
+
+    # --- Non-override: antplus does NOT use zwift_udp_* values ---
+
+    def test_antplus_does_not_override_buffer_seconds(self):
+        """When power_source='antplus', controller.buffer_seconds uses global buffer_seconds."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['power_source'] = 'antplus'
+        settings['data_source']['hr_source'] = 'antplus'
+        settings['buffer_seconds'] = 5
+        controller = PowerZoneController(self._create_settings_file(settings))
+        self.assertEqual(controller.buffer_seconds, 5)
+
+    def test_antplus_does_not_override_minimum_samples(self):
+        """When power_source='antplus', controller.minimum_samples uses global minimum_samples."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['power_source'] = 'antplus'
+        settings['data_source']['hr_source'] = 'antplus'
+        settings['minimum_samples'] = 6
+        controller = PowerZoneController(self._create_settings_file(settings))
+        self.assertEqual(controller.minimum_samples, 6)
+
+    def test_antplus_does_not_override_dropout_timeout(self):
+        """When power_source='antplus', controller.dropout_timeout uses global dropout_timeout."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['power_source'] = 'antplus'
+        settings['data_source']['hr_source'] = 'antplus'
+        settings['dropout_timeout'] = 7
+        controller = PowerZoneController(self._create_settings_file(settings))
+        self.assertEqual(controller.dropout_timeout, 7)
+
+    # --- Cross-validation: zwift_udp_minimum_samples > buffer_seconds * BUFFER_RATE_HZ ---
+
+    def test_cross_validation_minimum_samples_clamped_to_buffer(self):
+        """zwift_udp_minimum_samples larger than buffer capacity should be clamped."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        # buffer_seconds=1 → buffer_size = 1 * BUFFER_RATE_HZ = 4
+        settings['data_source']['zwift_udp_buffer_seconds'] = 1
+        settings['data_source']['zwift_udp_minimum_samples'] = 10  # > 4
+        with patch('builtins.print') as mock_print:
+            controller = PowerZoneController(self._create_settings_file(settings))
+        printed = ' '.join(str(c) for c in mock_print.call_args_list)
+        self.assertIn('zwift_udp_minimum_samples', printed)
+        self.assertIn('FIGYELMEZTETÉS', printed)
+        from smart_fan_controller import PowerZoneController as PZC
+        buf_size = 1 * PZC.BUFFER_RATE_HZ
+        self.assertEqual(controller.settings['data_source']['zwift_udp_minimum_samples'], buf_size)
+
+    # --- Buffer size: deque maxlen uses zwift_udp_buffer_seconds in Zwift UDP mode ---
+
+    def test_buffer_deque_maxlen_uses_zwift_udp_buffer_seconds(self):
+        """In Zwift UDP mode, power_buffer maxlen should be zwift_udp_buffer_seconds * BUFFER_RATE_HZ."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['power_source'] = 'zwift_udp'
+        settings['data_source']['zwift_udp_buffer_seconds'] = 10
+        controller = PowerZoneController(self._create_settings_file(settings))
+        from smart_fan_controller import PowerZoneController as PZC
+        expected_maxlen = int(10 * PZC.BUFFER_RATE_HZ)
+        self.assertEqual(controller.power_buffer.maxlen, expected_maxlen)
+
+    def test_buffer_deque_maxlen_uses_global_buffer_seconds_for_antplus(self):
+        """In antplus mode, power_buffer maxlen should be buffer_seconds * BUFFER_RATE_HZ."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['power_source'] = 'antplus'
+        settings['data_source']['hr_source'] = 'antplus'
+        settings['buffer_seconds'] = 5
+        controller = PowerZoneController(self._create_settings_file(settings))
+        from smart_fan_controller import PowerZoneController as PZC
+        expected_maxlen = int(5 * PZC.BUFFER_RATE_HZ)
+        self.assertEqual(controller.power_buffer.maxlen, expected_maxlen)
+
+    # --- Unknown field: new keys should NOT trigger "Ismeretlen mező" warning ---
+
+    def _get_unknown_fields_text(self, printed):
+        """Return text after 'Ismeretlen' in output, or empty string if absent."""
+        if 'Ismeretlen' in printed:
+            return printed.split('Ismeretlen')[1]
+        return ''
+
+    def test_zwift_udp_buffer_seconds_not_unknown(self):
+        """zwift_udp_buffer_seconds should NOT trigger unknown key warning."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['zwift_udp_buffer_seconds'] = 10
+        with patch('builtins.print') as mock_print:
+            PowerZoneController(self._create_settings_file(settings))
+        printed = ' '.join(str(c) for c in mock_print.call_args_list)
+        self.assertNotIn('zwift_udp_buffer_seconds', self._get_unknown_fields_text(printed))
+
+    def test_zwift_udp_minimum_samples_not_unknown(self):
+        """zwift_udp_minimum_samples should NOT trigger unknown key warning."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['zwift_udp_minimum_samples'] = 2
+        with patch('builtins.print') as mock_print:
+            PowerZoneController(self._create_settings_file(settings))
+        printed = ' '.join(str(c) for c in mock_print.call_args_list)
+        self.assertNotIn('zwift_udp_minimum_samples', self._get_unknown_fields_text(printed))
+
+    def test_zwift_udp_dropout_timeout_not_unknown(self):
+        """zwift_udp_dropout_timeout should NOT trigger unknown key warning."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['zwift_udp_dropout_timeout'] = 15
+        with patch('builtins.print') as mock_print:
+            PowerZoneController(self._create_settings_file(settings))
+        printed = ' '.join(str(c) for c in mock_print.call_args_list)
+        self.assertNotIn('zwift_udp_dropout_timeout', self._get_unknown_fields_text(printed))
+
+    def test_new_zwift_udp_keys_no_unknown_warning(self):
+        """All three new zwift_udp_* keys together should not produce any unknown key warning."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['zwift_udp_buffer_seconds'] = 10
+        settings['data_source']['zwift_udp_minimum_samples'] = 2
+        settings['data_source']['zwift_udp_dropout_timeout'] = 15
+        with patch('builtins.print') as mock_print:
+            PowerZoneController(self._create_settings_file(settings))
+        printed = ' '.join(str(c) for c in mock_print.call_args_list)
+        unknown_text = self._get_unknown_fields_text(printed)
+        self.assertNotIn('zwift_udp_buffer_seconds', unknown_text)
+        self.assertNotIn('zwift_udp_minimum_samples', unknown_text)
+        self.assertNotIn('zwift_udp_dropout_timeout', unknown_text)
+
+    # --- Init print: Zwift UDP mode print ---
+
+    def test_zwift_udp_mode_init_print(self):
+        """When Zwift UDP mode is active, init should print the Zwift UDP mode line."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['power_source'] = 'zwift_udp'
+        settings['data_source']['zwift_udp_buffer_seconds'] = 10
+        settings['data_source']['zwift_udp_minimum_samples'] = 2
+        settings['data_source']['zwift_udp_dropout_timeout'] = 15
+        with patch('builtins.print') as mock_print:
+            PowerZoneController(self._create_settings_file(settings))
+        printed = ' '.join(str(c) for c in mock_print.call_args_list)
+        self.assertIn('Zwift UDP', printed)
+        self.assertIn('buffer=10s', printed)
+        self.assertIn('min_samples=2', printed)
+        self.assertIn('dropout=15s', printed)
+
+    def test_antplus_no_zwift_udp_mode_print(self):
+        """When antplus mode, there should be no Zwift UDP mode init print."""
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        settings['data_source']['power_source'] = 'antplus'
+        settings['data_source']['hr_source'] = 'antplus'
+        with patch('builtins.print') as mock_print:
+            PowerZoneController(self._create_settings_file(settings))
+        printed = ' '.join(str(c) for c in mock_print.call_args_list)
+        self.assertNotIn('Zwift UDP mód', printed)
+
+
 if __name__ == '__main__':
     unittest.main()
