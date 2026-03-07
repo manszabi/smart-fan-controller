@@ -1337,9 +1337,18 @@ class PowerZoneController:
                         print(f"🕐 0W detektálva: cooldown indítva {self.cooldown_seconds}s (cél: 0)")
                         print(f"🕐 Cooldown felezve: {remaining:.0f}s → {new_remaining:.0f}s (nagy zónaesés: None → 0)")
                     else:
+                        # Már aktív cooldown, de jött 0W (pending_zone váltás)
+                        old_pending = self.pending_zone
+                        if old_pending is not None and old_pending != 0 and self.can_halve:
+                            remaining = self.cooldown_seconds - (current_time - self.cooldown_start_time)
+                            new_remaining = remaining / 2
+                            self.cooldown_start_time = current_time - (self.cooldown_seconds - new_remaining)
+                            self.can_halve = False
+                            self.can_double = True
+                            print(f"🕐 Cooldown felezve: ... (nagy zónaesés: {old_pending} → 0)")
                         print(f"🕐 0W detektálva: cooldown indítva {self.cooldown_seconds}s (cél: 0)")
-                    self.pending_zone = 0
-                    return False
+                        self.pending_zone = 0
+                        return False
                 else:
                     # Már 0-ban vagyunk, nincs teendő
                     return False

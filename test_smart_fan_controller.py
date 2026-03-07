@@ -322,6 +322,23 @@ class TestCooldownLogic(unittest.TestCase):
         result = self.controller.should_change_zone(0)
         self.assertFalse(result)
 
+    def test_zero_power_halving_during_active_cooldown(self):
+        """0W during existing cooldown (zero_power_immediate=False) should halve remaining time."""
+        self.controller.cooldown_active = True
+        self.controller.current_zone = 3
+        self.controller.pending_zone = 2
+        self.controller.can_halve = True
+        self.controller.can_double = False
+        self.controller.zero_power_immediate = False
+        t0 = time.time()
+        self.controller.cooldown_start_time = t0 - 10  # 10s remaining
+        self.controller.should_change_zone(0)
+        self.assertEqual(self.controller.pending_zone, 0)
+        self.assertFalse(self.controller.can_halve)
+        self.assertTrue(self.controller.can_double)
+        elapsed = time.time() - self.controller.cooldown_start_time
+        remaining = self.controller.cooldown_seconds - elapsed
+        self.assertAlmostEqual(remaining, 5, delta=0.5)
 
 class TestProcessPowerData(unittest.TestCase):
     """Test the main power data processing pipeline."""
