@@ -602,6 +602,8 @@ class PowerZoneController:
         self.cooldown_active = False
         self.cooldown_start_time = 0
         self.pending_zone = None
+        self.can_halve = True
+        self.can_double = False
 
         self.last_data_time = time.time()
 
@@ -1256,7 +1258,28 @@ class PowerZoneController:
             should_print = (current_time - self.last_cooldown_print) >= self.COOLDOWN_PRINT_INTERVAL
 
             if new_zone != self.pending_zone and new_zone < self.current_zone:
+                old_pending = self.pending_zone
                 self.pending_zone = new_zone
+
+                if old_pending is not None and new_zone > old_pending:
+                    # Pending zone increased → doubling
+                    if self.can_double:
+                        new_remaining = min(remaining * 2, self.cooldown_seconds)
+                        self.cooldown_start_time = current_time - (self.cooldown_seconds - new_remaining)
+                        self.can_double = False
+                        self.can_halve = True
+                        print(f"🕐 Cooldown duplázva: {remaining:.0f}s → {new_remaining:.0f}s (pending zóna emelkedett: {old_pending} → {new_zone})")
+                        remaining = new_remaining
+                elif new_zone == 0 or (self.current_zone - new_zone >= 2):
+                    # Big drop or zero → halving
+                    if self.can_halve:
+                        new_remaining = remaining / 2
+                        self.cooldown_start_time = current_time - (self.cooldown_seconds - new_remaining)
+                        self.can_halve = False
+                        self.can_double = True
+                        print(f"🕐 Cooldown felezve: {remaining:.0f}s → {new_remaining:.0f}s (nagy zónaesés: {old_pending} → {new_zone})")
+                        remaining = new_remaining
+
                 print(f"🕐 Cooldown aktív: még {remaining:.0f}s (várakozó zóna frissítve: {new_zone})")
                 self.last_cooldown_print = current_time
             elif should_print and new_zone < self.current_zone:
@@ -1303,8 +1326,19 @@ class PowerZoneController:
                     if not self.cooldown_active:
                         self.cooldown_active = True
                         self.cooldown_start_time = current_time
+                        self.can_halve = True
+                        self.can_double = False
+                        # Immediate halving at cooldown start: new_zone==0 is always a big drop
+                        remaining = self.cooldown_seconds
+                        new_remaining = remaining / 2
+                        self.cooldown_start_time = current_time - (self.cooldown_seconds - new_remaining)
+                        self.can_halve = False
+                        self.can_double = True
+                        print(f"🕐 0W detektálva: cooldown indítva {self.cooldown_seconds}s (cél: 0)")
+                        print(f"🕐 Cooldown felezve: {remaining:.0f}s → {new_remaining:.0f}s (nagy zónaesés: None → 0)")
+                    else:
+                        print(f"🕐 0W detektálva: cooldown indítva {self.cooldown_seconds}s (cél: 0)")
                     self.pending_zone = 0
-                    print(f"🕐 0W detektálva: cooldown indítva {self.cooldown_seconds}s (cél: 0)")
                     return False
                 else:
                     # Már 0-ban vagyunk, nincs teendő
@@ -1331,7 +1365,17 @@ class PowerZoneController:
             self.cooldown_active = True
             self.cooldown_start_time = current_time
             self.pending_zone = new_zone
+            self.can_halve = True
+            self.can_double = False
             print(f"🕐 Cooldown indítva: {self.cooldown_seconds}s várakozás (cél: {new_zone})")
+            # Immediate halving at cooldown start if big drop
+            if self.current_zone - new_zone >= 2:
+                remaining = self.cooldown_seconds
+                new_remaining = remaining / 2
+                self.cooldown_start_time = current_time - (self.cooldown_seconds - new_remaining)
+                self.can_halve = False
+                self.can_double = True
+                print(f"🕐 Cooldown felezve: {remaining:.0f}s → {new_remaining:.0f}s (nagy zónaesés: None → {new_zone})")
             return False
 
         return False
