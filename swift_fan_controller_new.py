@@ -242,7 +242,7 @@ def _load_int(src: dict, dst: dict, key: str, lo: int, hi: int) -> None:
         v = src[key]
         if isinstance(v, (int, float)) and not isinstance(v, bool) and lo <= v <= hi:
             dst[key] = int(v)
-        elif key in src:
+        else:
             print(f"⚠ Érvénytelen '{key}' érték: {v} ({lo}–{hi} közötti egész kell)")
 
 
@@ -1315,7 +1315,13 @@ class BLEPowerInputHandler:
                         return
                     # flags: 2 bájt LE; instantaneous power: 2 bájt LE signed int16
                     power = int.from_bytes(data[2:4], byteorder="little", signed=True)
-                    asyncio.run_coroutine_threadsafe(self.power_queue.put(power), loop)
+                    future = asyncio.run_coroutine_threadsafe(
+                        self.power_queue.put(power), loop
+                    )
+                    future.add_done_callback(
+                        lambda f: logger.debug(f"BLE Power queue put hiba: {f.exception()}")
+                        if not f.cancelled() and f.exception() else None
+                    )
                 except Exception as exc:
                     logger.warning(f"BLE Power notification feldolgozási hiba: {exc}")
 
@@ -1430,7 +1436,13 @@ class BLEHRInputHandler:
                         hr = int.from_bytes(data[1:3], byteorder="little")
                     else:
                         hr = data[1]
-                    asyncio.run_coroutine_threadsafe(self.hr_queue.put(hr), loop)
+                    future = asyncio.run_coroutine_threadsafe(
+                        self.hr_queue.put(hr), loop
+                    )
+                    future.add_done_callback(
+                        lambda f: logger.debug(f"BLE HR queue put hiba: {f.exception()}")
+                        if not f.cancelled() and f.exception() else None
+                    )
                 except Exception as exc:
                     logger.warning(f"BLE HR notification feldolgozási hiba: {exc}")
 
@@ -1505,10 +1517,14 @@ class ZwiftUDPInputHandler:
                 _Protocol,
                 local_addr=(self.host, self.port),
             )
-            await asyncio.Future()  # Fut, amíg a task nincs megszakítva
+            # Fut, amíg a task nincs megszakítva (CancelledError)
+            try:
+                while True:
+                    await asyncio.sleep(3600)
+            finally:
+                transport.close()
         except asyncio.CancelledError:
-            if self._transport:
-                self._transport.close()
+            raise
         except OSError as exc:
             logger.error(f"Zwift UDP bind hiba: {exc}")
 
@@ -1516,6 +1532,8 @@ class ZwiftUDPInputHandler:
         """JSON csomag feldolgozása – validáció és queue-ba helyezés.
 
         Érvénytelen JSON vagy tartományon kívüli értékek figyelmen kívül maradnak.
+        A datagram_received callback az asyncio event loop-ból hívódik, ezért
+        az asyncio queue-ba helyezés biztonságos put_nowait-tel.
 
         Args:
             raw: A nyers UDP csomag bájtjai.
@@ -1530,14 +1548,20 @@ class ZwiftUDPInputHandler:
         if self.process_power and "power" in data:
             p = data["power"]
             if isinstance(p, (int, float)) and not isinstance(p, bool) and 0 <= p <= 2500:
-                asyncio.ensure_future(self.power_queue.put(int(p)))
+                try:
+                    self.power_queue.put_nowait(int(p))
+                except asyncio.QueueFull:
+                    logger.debug("Zwift UDP: power queue teli, adat elvetve")
             else:
                 logger.debug(f"Zwift UDP: érvénytelen power: {p}")
 
         if self.process_hr and "heartrate" in data:
             h = data["heartrate"]
             if isinstance(h, (int, float)) and not isinstance(h, bool) and 0 <= h <= 250:
-                asyncio.ensure_future(self.hr_queue.put(int(h)))
+                try:
+                    self.hr_queue.put_nowait(int(h))
+                except asyncio.QueueFull:
+                    logger.debug("Zwift UDP: hr queue teli, adat elvetve")
             else:
                 logger.debug(f"Zwift UDP: érvénytelen heartrate: {h}")
 
