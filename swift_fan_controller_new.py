@@ -78,11 +78,11 @@ logger = logging.getLogger("swift_fan_controller_new")
 DEFAULT_SETTINGS: Dict[str, Any] = {
     "ftp": 180,                    # Funkcionális küszöbteljesítmény wattban (100–500)
     "min_watt": 0,                 # Minimális érvényes teljesítmény (0 vagy több)
-    "max_watt": 1000,              # Maximális érvényes teljesítmény (min_watt-nál több)
-    "cooldown_seconds": 120,       # Zóna csökkentés előtti várakozási idő (s, 0–300)
-    "buffer_seconds": 3,           # Átlagolási ablak mérete (s, 1–10)
-    "minimum_samples": 8,          # Zónadöntéshez szükséges minimum mintaszám
-    "buffer_rate_hz": 4,          
+    "max_watt": 1000,              # Maximális érvényes teljesítmény
+    "cooldown_seconds": 120,       # Zóna csökkentés előtti várakozási idő (s), 0–300
+    "buffer_seconds": 3,           # Átlagolási ablak mérete (s), 1–10
+    "minimum_samples": 6,          # ← MÓDOSÍTOTT: volt 8, most 6 (= buffersize // 2)
+    "buffer_rate_hz": 4,           # Várható adatbeérkezési ráta (Hz), 1–60
     "dropout_timeout": 5,          # Adatnélküli idő (s), ami után Z0-ra vált
     "zero_power_immediate": False, # True: 0W esetén azonnali leállás cooldown nélkül
     "zone_thresholds": {
@@ -163,15 +163,17 @@ def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
         print(f"⚠ '{settings_file}' beolvasási hiba: {exc}. Alapértelmezés használata.")
         return settings
 
-    # --- Egyszerű skaláris mezők ---
-    _load_int(loaded, settings, "ftp", 100, 500)
-    _load_int(loaded, settings, "min_watt", 0, 9999)
-    _load_int(loaded, settings, "max_watt", 1, 100000)
-    _load_int(loaded, settings, "cooldown_seconds", 0, 300)
-    _load_int(loaded, settings, "buffer_seconds", 1, 10)
-    _load_int(loaded, settings, "minimum_samples", 1, 1000)
-    _load_int(loaded, settings, "dropout_timeout", 1, 120)
-    _load_bool(loaded, settings, "zero_power_immediate")
+        # --- Egyszerű skaláris mezők ---
+        load_int(loaded, settings, "ftp", 100, 500)
+        load_int(loaded, settings, "min_watt", 0, 9999)
+        load_int(loaded, settings, "max_watt", 1, 100000)
+        load_int(loaded, settings, "cooldown_seconds", 0, 300)
+        load_int(loaded, settings, "buffer_seconds", 1, 10)
+        load_int(loaded, settings, "minimum_samples", 1, 1000)
+        load_int(loaded, settings, "buffer_rate_hz", 1, 60)    # ← ÚJ sor!
+        load_int(loaded, settings, "dropout_timeout", 1, 120)
+        load_bool(loaded, settings, "zero_power_immediate")
+
 
     # --- Zóna határok ---
     if isinstance(loaded.get("zone_thresholds"), dict):
@@ -725,38 +727,32 @@ class CooldownController:
 class PowerAverager:
     """Gördülő átlagot számít a bejövő teljesítmény mintákból.
 
-    BUFFER_RATE_HZ mintát vár másodpercenként (4 Hz), és buffer_seconds
-    másodpercnyi ablakot tart. Minimum minimum_samples minta szükséges
-    egy érvényes átlaghoz.
+    buffer_rate_hz mintát vár másodpercenként (alapértelmezett: 4 Hz),
+    és buffer_seconds másodpercnyi ablakot tart. Az effective_minimum
+    automatikusan alkalmazkodik a valódi buffer méretéhez, így akkor is
+    számol átlagot, ha kevesebb adat érkezik, mint minimum_samples.
 
     Attribútumok:
-        buffer: Mintákat tároló deque (maxlen = buffer_seconds × BUFFER_RATE_HZ).
-        minimum_samples: Minimum mintaszám érvényes átlaghoz.
-        buffer_size: A buffer maximális mérete.
+        buffer: Mintákat tároló deque (maxlen = buffer_seconds × buffer_rate_hz).
+        minimum_samples: Kívánt minimum mintaszám érvényes átlaghoz.
+        effective_minimum: Ténylegesen alkalmazott minimum (max: buffersize // 2).
+        buffersize: A buffer maximális mérete.
     """
-
-    BUFFER_RATE_HZ = 4
-
-    def __init__(self, buffer_seconds: int, minimum_samples: int, buffer_rate_hz: int = 4):
-        self.buffer_size = max(1, int(buffer_seconds * buffer_rate_hz))
-        self.buffer: deque = deque(maxlen=self.buffer_size)
+    def __init__(self, buffer_seconds: int, minimum_samples: int,
+        buffer_rate_hz: int = 4) -> None:
+        rate = max(1, int(buffer_rate_hz))
+        self.buffersize = max(1, int(buffer_seconds) * rate)
+        self.buffer: deque = deque(maxlen=self.buffersize)
         self.minimum_samples = minimum_samples
+        # Védelem: effective_minimum soha nem nagyobb, mint a buffer fele
+        self.effective_minimum = min(self.minimum_samples, max(1, self.buffersize // 2))
 
     def add_sample(self, power: float) -> Optional[float]:
-        """Új minta hozzáadása és az átlag visszaadása, ha elég minta van.
-
-        Args:
-            power: Teljesítmény wattban.
-
-        Returns:
-            A gördülő átlag, ha >= minimum_samples minta érkezett; None egyébként.
-        """
         self.buffer.append(power)
-        if len(self.buffer) < self.minimum_samples:
+        if len(self.buffer) < self.effective_minimum:
             logging.debug(
-                "📊 Power adatok gyűjtése: %d/%d",
-                len(self.buffer),
-                self.minimum_samples,
+                "Power adatok gyűjtése: %d/%d (effective min)",
+                len(self.buffer), self.effective_minimum,
             )
             return None
         return compute_average(self.buffer)
@@ -773,42 +769,40 @@ class PowerAverager:
 class HRAverager:
     """Gördülő átlagot számít a bejövő HR mintákból.
 
-    BUFFER_RATE_HZ mintát vár másodpercenként (4 Hz), és buffer_seconds
-    másodpercnyi ablakot tart. Minimum minimum_samples minta szükséges
-    egy érvényes átlaghoz.
+    buffer_rate_hz mintát vár másodpercenként (alapértelmezett: 4 Hz),
+    és buffer_seconds másodpercnyi ablakot tart. Az effective_minimum
+    automatikusan alkalmazkodik a valódi buffer méretéhez, így akkor is
+    számol átlagot, ha kevesebb adat érkezik, mint minimum_samples.
 
     Attribútumok:
-        buffer: Mintákat tároló deque.
-        minimum_samples: Minimum mintaszám érvényes átlaghoz.
-        buffer_size: A buffer maximális mérete.
+        buffer: Mintákat tároló deque (maxlen = buffer_seconds × buffer_rate_hz).
+        minimum_samples: Kívánt minimum mintaszám érvényes átlaghoz.
+        effective_minimum: Ténylegesen alkalmazott minimum (max: buffersize // 2).
+        buffersize: A buffer maximális mérete.
     """
-
-    BUFFER_RATE_HZ = 4
-
-    def __init__(self, buffer_seconds: int, minimum_samples: int, buffer_rate_hz: int = 4):
-        self.buffer_size = max(1, int(buffer_seconds * buffer_rate_hz))
-        self.buffer: deque = deque(maxlen=self.buffer_size)
+    def __init__(self, buffer_seconds: int, minimum_samples: int,
+        buffer_rate_hz: int = 4) -> None:
+        rate = max(1, int(buffer_rate_hz))
+        self.buffersize = max(1, int(buffer_seconds) * rate)
+        self.buffer: deque = deque(maxlen=self.buffersize)
         self.minimum_samples = minimum_samples
+        # Védelem: effective_minimum soha nem nagyobb, mint a buffer fele
+        self.effective_minimum = min(self.minimum_samples, max(1, self.buffersize // 2))
 
     def add_sample(self, hr: int) -> Optional[float]:
-        """Új minta hozzáadása és az átlag visszaadása, ha elég minta van.
-
-        Args:
-            hr: Szívfrekvencia bpm-ben.
-
-        Returns:
-            A gördülő átlag, ha >= minimum_samples minta érkezett; None egyébként.
-        """
+        """Új minta hozzáadása és az átlag visszaadása, ha elég minta van."""
         self.buffer.append(hr)
-        if len(self.buffer) < self.minimum_samples:
-            logging.debug("📊 HR adatok gyűjtése: %d/%d", len(self.buffer), self.minimum_samples)
+        if len(self.buffer) < self.effective_minimum:
+            logging.debug(
+                "HR adatok gyűjtése: %d/%d (effective min)",
+                len(self.buffer), self.effective_minimum,
+            )
             return None
         return compute_average(self.buffer)
 
     def clear(self) -> None:
         """Törli az összes pufferelt mintát."""
         self.buffer.clear()
-
 
 # ============================================================
 # KONZOLOS KIÍRÁS (throttle-olt)
