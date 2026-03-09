@@ -37,6 +37,7 @@ import signal
 import sys
 import threading
 import time
+import atexit
 from collections import deque
 from typing import Any, Dict, Optional, Tuple
 
@@ -2232,6 +2233,12 @@ class FanController:
             pass
         finally:
             await ble_fan.disconnect()
+            # ANT leállítása is itt, ha még fut:
+            if self._antplus_handler:
+                self._antplus_handler.stop()
+            if self._antplus_thread and self._antplus_thread.is_alive():
+                self._antplus_thread.join(timeout=5.0)
+
 
     def stop(self) -> None:
         """Leállítja az összes asyncio task-ot és az ANT+ szálat."""
@@ -2239,6 +2246,11 @@ class FanController:
             task.cancel()
         if self._antplus_handler:
             self._antplus_handler.stop()
+        if self._antplus_thread and self._antplus_thread.is_alive():
+            self._antplus_thread.join(timeout=5.0)   # ← ÚJ: max 5s-t vár
+            if self._antplus_thread.is_alive():
+                logger.warning("ANT+ szál nem állt le 5s alatt!")
+
 
 
 # ============================================================
@@ -2246,25 +2258,6 @@ class FanController:
 # ============================================================
 
 def main() -> None:
-    """A program belépési pontja.
-
-    Inicializálási sorrend:
-        1. Naplózás beállítása (külső könyvtárak zajának szűrése)
-        2. FanController létrehozása (settings.json betöltése)
-        3. Indítási infó kiírása
-        4. asyncio event loop indítása
-        5. Ctrl+C / SIGTERM kezelése
-        6. Tiszta leállítás
-    """
-    # Naplózás beállítása
-    handler = logging.StreamHandler()
-    handler.setFormatter(
-        logging.Formatter("%(asctime)s [%(threadName)s] %(levelname)s %(message)s")
-    )
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
-
-    # Külső könyvtárak elnyomása
     logging.getLogger("bleak").setLevel(logging.CRITICAL)
     logging.getLogger("openant").setLevel(logging.CRITICAL)
 
@@ -2273,7 +2266,6 @@ def main() -> None:
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-
     cleaned_up = False
 
     def cleanup() -> None:
@@ -2282,8 +2274,6 @@ def main() -> None:
             return
         cleaned_up = True
         controller.stop()
-
-    # Adjunk időt a task-oknak a leállásra, ha a loop még használható
         try:
             if not loop.is_closed() and not loop.is_running():
                 pending = asyncio.all_tasks(loop)
@@ -2292,28 +2282,25 @@ def main() -> None:
                         asyncio.gather(*pending, return_exceptions=True)
                     )
         except Exception:
-            # Biztonsági háló: soha ne dobjunk hibát a cleanup közben
             pass
-        print()
-        print("✓ Program leállítva")
-    def _sigterm_handler(signum: int, frame: Any) -> None:
-        print("\n🛑 SIGTERM fogadva, leállítás...")
-        # SIGTERM esetén is ugyanazt a kontrollált leállást használjuk
-        cleanup()
+        print("\nProgram leállítva.")
 
-        sys.exit(0)
+    def signal_handler(signum: int, frame: Any) -> None:   # ← 1. ELŐSZÖR definiálva
+        print(f"\nSignal {signum} fogadva, leállítás...")
+        loop.call_soon_threadsafe(loop.stop)
 
-    import atexit
+    signal.signal(signal.SIGTERM, signal_handler)           # ← 2. UTÁNA használva
+
     atexit.register(cleanup)
-    signal.signal(signal.SIGTERM, _sigterm_handler)
 
     try:
         loop.run_until_complete(controller.run())
     except KeyboardInterrupt:
-        print("\n\n🛑 Leállítás...")
-        cleanup()
+        print("\nLeállítás (Ctrl+C)...")
     finally:
+        cleanup()
         loop.close()
+
 
 
 if __name__ == "__main__":
