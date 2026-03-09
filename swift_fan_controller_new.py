@@ -1896,9 +1896,6 @@ async def hr_processor_task(
             state.last_hr_time = now
             state.current_hr_zone = new_hr_zone
             state.current_avg_hr = float(avg_hr)
-            # hr_only módban a dropout checker last_power_time-ot figyel
-            if zone_mode == "hr_only":
-                state.last_power_time = now
 
         zone_event.set()  # Zone controller újraszámítást igényel
 
@@ -2006,6 +2003,11 @@ async def dropout_checker_task(
         settings: Betöltött beállítások dict-je.
     """
     dropout_timeout = settings["dropout_timeout"]
+    hr_enabled = settings.get("heart_rate_zones", {}).get("enabled", False)
+    zone_mode = (
+        settings["heart_rate_zones"].get("zone_mode", "power_only")
+        if hr_enabled else "power_only"
+    )
     logger.info("Dropout checker korrutin elindítva")
 
     while True:
@@ -2014,31 +2016,44 @@ async def dropout_checker_task(
         send_dropout = False
 
         async with state.lock:
-            elapsed = now - state.last_power_time
-            if (
-                elapsed >= dropout_timeout 
-                and state.current_zone is not None 
-                and state.current_zone != 0   
-            ):   
-                print(f"Adatforrás kiesett {elapsed:.1f}s – LEVEL0")
+            if state.current_zone is None or state.current_zone == 0:
+                continue
 
-                # Pufferek ürítése
-                power_averager.clear()
-                hr_averager.clear()
+            power_fresh = (now - state.last_power_time) < dropout_timeout
+            hr_fresh = (
+                state.last_hr_time is not None
+                and (now - state.last_hr_time) < dropout_timeout
+            )
 
-                # State reset
+            if zone_mode == "power_only":
+                stale = not power_fresh
+                elapsed = now - state.last_power_time
+                label = "power"
+            elif zone_mode == "hr_only":
+                stale = not hr_fresh
+                elapsed = (
+                    (now - state.last_hr_time)
+                    if state.last_hr_time is not None
+                    else float("inf")
+                )
+                label = "HR"
+            else:  # higher_wins
+                stale = not power_fresh and not hr_fresh
+                elapsed = min(
+                    now - state.last_power_time,
+                    (now - state.last_hr_time)
+                    if state.last_hr_time is not None
+                    else float("inf"),
+                )
+                label = "power+HR"
+
+            if stale:
+                print(f"⚠ Adatforrás kiesett ({label}, {elapsed:.1f}s) → LEVEL:0")
                 state.current_zone = 0
-                state.current_power_zone = None
-                state.current_hr_zone = None
-                state.current_avg_power = None
-                state.current_avg_hr = None
-
                 send_dropout = True
-
 
         if send_dropout:
             await send_zone(0, zone_queue)
-
 
 # ============================================================
 # FAN CONTROLLER – FŐ ÖSSZEHANGOLÁS
