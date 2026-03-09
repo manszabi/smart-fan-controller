@@ -33,9 +33,7 @@ import copy
 import json
 import logging
 import math
-import os
 import signal
-import socket
 import sys
 import threading
 import time
@@ -232,6 +230,76 @@ def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
         settings["buffer_seconds"] = ds_cfg["zwift_udp_buffer_seconds"]
         settings["minimum_samples"] = ds_cfg["zwift_udp_minimum_samples"]
         settings["dropout_timeout"] = ds_cfg["zwift_udp_dropout_timeout"]
+
+
+    # --- Kereszt-validációk a végleges beállításokon ---
+    # 1) minimum_samples <= buffer_seconds * BUFFER_RATE_HZ
+    try:
+        buffer_seconds = int(settings.get("buffer_seconds", 0))
+        minimum_samples = int(settings.get("minimum_samples", 0))
+        buffer_rate_hz = int(globals().get("BUFFER_RATE_HZ", 1))
+        if buffer_seconds > 0 and buffer_rate_hz > 0:
+            max_samples = buffer_seconds * buffer_rate_hz
+            if minimum_samples > max_samples:
+                print(
+                    f"⚠ Érvénytelen minimum_samples ({minimum_samples}) – "
+                    f"nagyobb, mint buffer_seconds * BUFFER_RATE_HZ ({buffer_seconds} * {buffer_rate_hz} = {max_samples}). "
+                    f"minimum_samples {max_samples}-re állítva."
+                )
+                settings["minimum_samples"] = max_samples
+    except Exception as exc:
+        # Ha bármi váratlan hiba történik, nem dobunk kivételt konfiguráció betöltéskor.
+        print(f"⚠ minimum_samples/buffer_seconds kereszt-validáció sikertelen: {exc}")
+    # 2) Power zóna: min_watt < max_watt
+    try:
+        zt = settings.get("zone_thresholds") or {}
+        min_watt = zt.get("min_watt")
+        max_watt = zt.get("max_watt")
+        if isinstance(min_watt, int) and isinstance(max_watt, int):
+            if min_watt > max_watt:
+                print(
+                    f"⚠ Érvénytelen watt tartomány (min_watt={min_watt}, max_watt={max_watt}). "
+                    f"Feltételezett felcserélés, értékek megfordítva."
+                )
+                zt["min_watt"], zt["max_watt"] = max_watt, min_watt
+            elif min_watt == max_watt:
+                print(
+                    f"⚠ min_watt és max_watt azonos értékű ({min_watt}). "
+                    f"max_watt {min_watt + 1}-re állítva."
+                )
+                zt["max_watt"] = min_watt + 1
+    except Exception as exc:
+        print(f"⚠ Watt zóna kereszt-validáció sikertelen: {exc}")
+    # 3) HR zónák: z1_max_percent < z2_max_percent és resting_hr < max_hr
+    try:
+        hrz = settings.get("heart_rate_zones") or {}
+        z1p = hrz.get("z1_max_percent")
+        z2p = hrz.get("z2_max_percent")
+        if isinstance(z1p, int) and isinstance(z2p, int):
+            if z1p >= z2p:
+                print(
+                    f"⚠ Érvénytelen HR zóna százalékok (z1_max_percent={z1p}, z2_max_percent={z2p}). "
+                    f"Értékek rendezése és legalább 1% különbség biztosítása."
+                )
+                low = min(z1p, z2p)
+                high = max(z1p, z2p)
+                # biztosítsuk, hogy low < high
+                if low == high:
+                    high = min(100, low + 1)
+                hrz["z1_max_percent"] = low
+                hrz["z2_max_percent"] = high
+        max_hr = hrz.get("max_hr")
+        resting_hr = hrz.get("resting_hr")
+        if isinstance(max_hr, int) and isinstance(resting_hr, int):
+            if resting_hr >= max_hr:
+                new_rest = max(30, max_hr - 1)
+                print(
+                    f"⚠ Érvénytelen HR értékek (resting_hr={resting_hr}, max_hr={max_hr}). "
+                    f"resting_hr {new_rest}-re állítva, hogy resting_hr < max_hr legyen."
+                )
+                hrz["resting_hr"] = new_rest
+    except Exception as exc:
+        print(f"⚠ HR zóna kereszt-validáció sikertelen: {exc}")
 
     return settings
 
@@ -650,7 +718,11 @@ class PowerAverager:
         """
         self.buffer.append(power)
         if len(self.buffer) < self.minimum_samples:
-            print(f"📊 Power adatok gyűjtése: {len(self.buffer)}/{self.minimum_samples}")
+            logging.debug(
+                "📊 Power adatok gyűjtése: %d/%d",
+                len(self.buffer),
+                self.minimum_samples,
+            )
             return None
         return compute_average(self.buffer)
 
@@ -694,7 +766,7 @@ class HRAverager:
         """
         self.buffer.append(hr)
         if len(self.buffer) < self.minimum_samples:
-            print(f"📊 HR adatok gyűjtése: {len(self.buffer)}/{self.minimum_samples}")
+            logging.debug("📊 HR adatok gyűjtése: %d/%d", len(self.buffer), self.minimum_samples)
             return None
         return compute_average(self.buffer)
 
@@ -1820,10 +1892,12 @@ async def dropout_checker_task(
     """Adatforrás kiesés detektálása és azonnali Z0 küldése.
 
     Másodpercenként ellenőrzi, hogy érkezett-e adat a dropout_timeout-on belül.
-    Ha nem, Z0-ra kapcsolja a ventilátort és törli a puffereket.
-
+    
+    Ha nem, Z0-ra kapcsolja a ventilátort (LEVEL:0-t küld).
     hr_only módban a last_hr_time-ot figyeli (amit a hr_processor_task
     szinkronban tart a last_power_time-mal).
+    Megjegyzés: ez a feladat csak a dropout detektálását és a Z0 küldését
+    végzi, az átlagoló pufferek (PowerAverager/HRAverager) ürítését nem.
 
     Args:
         state: A megosztott vezérlő állapot.
@@ -2078,18 +2152,25 @@ def main() -> None:
             return
         cleaned_up = True
         controller.stop()
-        # Adjunk időt a task-oknak a leállásra
+
+    # Adjunk időt a task-oknak a leállásra, ha a loop még használható
         try:
-            pending = asyncio.all_tasks(loop)
-            if pending:
-                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            if not loop.is_closed() and not loop.is_running():
+                pending = asyncio.all_tasks(loop)
+                if pending:
+                    loop.run_until_complete(
+                        asyncio.gather(*pending, return_exceptions=True)
+                    )
         except Exception:
+            # Biztonsági háló: soha ne dobjunk hibát a cleanup közben
             pass
         print()
         print("✓ Program leállítva")
-
     def _sigterm_handler(signum: int, frame: Any) -> None:
         print("\n🛑 SIGTERM fogadva, leállítás...")
+        # SIGTERM esetén is ugyanazt a kontrollált leállást használjuk
+        cleanup()
+
         sys.exit(0)
 
     import atexit
