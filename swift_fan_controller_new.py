@@ -252,7 +252,7 @@ def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
     try:
         buffer_seconds = int(settings.get("buffer_seconds", 0))
         minimum_samples = int(settings.get("minimum_samples", 0))
-        buffer_rate_hz = int(globals().get("BUFFER_RATE_HZ", 1))
+        buffer_rate_hz = int(settings.get("buffer_rate_hz", 4))
         if buffer_seconds > 0 and buffer_rate_hz > 0:
             max_samples = buffer_seconds * buffer_rate_hz
             if minimum_samples > max_samples:
