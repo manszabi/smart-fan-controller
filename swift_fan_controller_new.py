@@ -82,6 +82,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "cooldown_seconds": 120,       # Zóna csökkentés előtti várakozási idő (s, 0–300)
     "buffer_seconds": 3,           # Átlagolási ablak mérete (s, 1–10)
     "minimum_samples": 8,          # Zónadöntéshez szükséges minimum mintaszám
+    "buffer_rate_hz": 4,          
     "dropout_timeout": 5,          # Adatnélküli idő (s), ami után Z0-ra vált
     "zero_power_immediate": False, # True: 0W esetén azonnali leállás cooldown nélkül
     "zone_thresholds": {
@@ -736,8 +737,8 @@ class PowerAverager:
 
     BUFFER_RATE_HZ = 4
 
-    def __init__(self, buffer_seconds: int, minimum_samples: int) -> None:
-        self.buffer_size = max(1, int(buffer_seconds * self.BUFFER_RATE_HZ))
+    def __init__(self, buffer_seconds: int, minimum_samples: int, buffer_rate_hz: int = 4):
+        self.buffer_size = max(1, int(buffer_seconds * buffer_rate_hz))
         self.buffer: deque = deque(maxlen=self.buffer_size)
         self.minimum_samples = minimum_samples
 
@@ -784,8 +785,8 @@ class HRAverager:
 
     BUFFER_RATE_HZ = 4
 
-    def __init__(self, buffer_seconds: int, minimum_samples: int) -> None:
-        self.buffer_size = max(1, int(buffer_seconds * self.BUFFER_RATE_HZ))
+    def __init__(self, buffer_seconds: int, minimum_samples: int, buffer_rate_hz: int = 4):
+        self.buffer_size = max(1, int(buffer_seconds * buffer_rate_hz))
         self.buffer: deque = deque(maxlen=self.buffer_size)
         self.minimum_samples = minimum_samples
 
@@ -2157,8 +2158,9 @@ class FanController:
         zone_event = asyncio.Event()
 
         state = ControllerState()
-        power_averager = PowerAverager(s["buffer_seconds"], s["minimum_samples"])
-        hr_averager = HRAverager(s["buffer_seconds"], s["minimum_samples"])
+        buffer_rate_hz = s.get("buffer_rate_hz", 4)  # ← ÚJ
+        power_averager = PowerAverager(s["buffer_seconds"], s["minimum_samples"], buffer_rate_hz)  # ← MÓDOSÍTOTT
+        hr_averager = HRAverager(s["buffer_seconds"], s["minimum_samples"], buffer_rate_hz)        # ← MÓDOSÍTOTT
         cooldown_ctrl = CooldownController(s["cooldown_seconds"])
         printer = ConsolePrinter()
 

@@ -5,6 +5,7 @@
   "cooldown_seconds": 120,
   "buffer_seconds": 3,
   "minimum_samples": 8,
+  "buffer_rate_hz": 4,
   "dropout_timeout": 5,
   "zero_power_immediate": false,
   "zone_thresholds": {
