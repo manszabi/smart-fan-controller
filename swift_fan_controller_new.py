@@ -909,25 +909,25 @@ class BLEFanOutputController:
         self._retry_reset_time: Optional[float] = None
         self._auth_failed: bool = False
 
-async def run(self, zone_queue: asyncio.Queue) -> None:
-    """A BLE fan kimenet fő korrutinja – olvassa a zone_queue-t és küldi a parancsokat.
+    async def run(self, zone_queue: asyncio.Queue) -> None:
+        """A BLE fan kimenet fő korrutinja – olvassa a zone_queue-t és küldi a parancsokat.
 
-    Indításkor megpróbál csatlakozni a BLE eszközhöz, majd folyamatosan
-    olvassa a zone_queue-t és elküldi a zóna parancsokat.
+        Indításkor megpróbál csatlakozni a BLE eszközhöz, majd folyamatosan
+        olvassa a zone_queue-t és elküldi a zóna parancsokat.
 
-    Args:
-        zone_queue: asyncio.Queue, amelyből a zóna parancsokat olvassa.
-    """
-    if not _BLEAK_AVAILABLE:          # ← underscore nélkül, ahogy definiálva van
-        logger.error("BLE Fan: bleak könyvtár nem elérhető – BLE kimenet letiltva!")
-        return
+        Args:
+            zone_queue: asyncio.Queue, amelyből a zóna parancsokat olvassa.
+        """
+        if not _BLEAK_AVAILABLE:          # ← underscore nélkül, ahogy definiálva van
+            logger.error("BLE Fan: bleak könyvtár nem elérhető – BLE kimenet letiltva!")
+            return
 
-    logger.info("BLE Fan Output korrutin elindítva")
-    await self._initial_connect()
+        logger.info("BLE Fan Output korrutin elindítva")
+        await self._initial_connect()
 
-    while True:
-        zone = await zone_queue.get()
-        await self._send_zone(zone)
+        while True:
+            zone = await zone_queue.get()
+            await self._send_zone(zone)
 
 
     async def _initial_connect(self) -> None:
@@ -957,109 +957,109 @@ async def run(self, zone_queue: asyncio.Queue) -> None:
             logger.error(f"BLE Fan keresési hiba: {exc}")
             return False
 
-async def _connect(self) -> bool:
-    """Csatlakozás a korábban megtalált BLE eszközhöz.
+    async def _connect(self) -> bool:
+        """Csatlakozás a korábban megtalált BLE eszközhöz.
 
-    Returns:
-        True, ha a csatlakozás sikeres.
-    """
-    if not _BLEAK_AVAILABLE:
-        return False
-    if not self._device_address:
-        return False
-    try:
-        if self._client and self._client.is_connected:
-            return True
-        self._client = BleakClient(
-            self._device_address,
-            timeout=self.connection_timeout,
-            disconnected_callback=self._on_disconnect,
-        )
-        await self._client.connect()
-        if self.pin_code is not None:
-            ok = await self._authenticate()
-            if not ok:
-                return False
-        self.is_connected = True
-        self._retry_count = 0
-        self._retry_reset_time = None
-        self.last_sent = None
-        logger.info(f"BLE Fan csatlakozva: {self._device_address}")
-        return True
-    except Exception as exc:
-        logger.error(f"BLE Fan csatlakozási hiba: {exc}")
-        self.is_connected = False
-        self._client = None
-        return False
-
-async def _authenticate(self) -> bool:
-    """Alkalmazás szintű BLE PIN autentikáció.
-
-    Returns:
-        True, ha az autentikáció sikeres (vagy timeout esetén is folytatja).
-    """
-    try:
-        auth_event = asyncio.Event()
-        auth_result: list = [None]
-
-        def _notify_cb(sender: Any, data: bytes) -> None:
-            auth_result[0] = data.decode("utf-8", errors="replace").strip()
-            auth_event.set()
-
-        await self._client.start_notify(self.characteristic_uuid, _notify_cb)
+        Returns:
+            True, ha a csatlakozás sikeres.
+        """
+        if not _BLEAK_AVAILABLE:
+            return False
+        if not self._device_address:
+            return False
         try:
-            # 1. AUTH parancs küldése
-            try:
-                await asyncio.wait_for(
-                    self._client.write_gatt_char(
-                        self.characteristic_uuid,
-                        f"AUTH:{self.pin_code}".encode("utf-8"),
-                    ),
-                    timeout=self.command_timeout,
-                )
-            except asyncio.TimeoutError:
-                logger.error("BLE AUTH write timeout")
-                return False
-
-            # 2. Válasz megvárása
-            try:
-                await asyncio.wait_for(
-                    auth_event.wait(), timeout=self.command_timeout
-                )
-            except asyncio.TimeoutError:
-                logger.warning("BLE AUTH válasz timeout - folytatás autentikáció nélkül")
+            if self._client and self._client.is_connected:
                 return True
+            self._client = BleakClient(
+                self._device_address,
+                timeout=self.connection_timeout,
+                disconnected_callback=self._on_disconnect,
+            )
+            await self._client.connect()
+            if self.pin_code is not None:
+                ok = await self._authenticate()
+                if not ok:
+                    return False
+            self.is_connected = True
+            self._retry_count = 0
+            self._retry_reset_time = None
+            self.last_sent = None
+            logger.info(f"BLE Fan csatlakozva: {self._device_address}")
+            return True
+        except Exception as exc:
+            logger.error(f"BLE Fan csatlakozási hiba: {exc}")
+            self.is_connected = False
+            self._client = None
+            return False
 
-            # 3. Válasz kiértékelése
-            resp = auth_result[0]
-            if resp is None:
-                logger.error("BLE AUTH: üres válasz")
-                return False
-            if resp == "AUTH_OK":
-                logger.info("BLE AUTH sikeres")
-                return True
-            if resp in ("AUTH_FAIL", "AUTH_LOCKED"):
-                logger.error(f"BLE AUTH sikertelen: {resp} - ellenorizd a pin_code erteket!")
-                self._auth_failed = True
+    async def _authenticate(self) -> bool:
+        """Alkalmazás szintű BLE PIN autentikáció.
+
+        Returns:
+            True, ha az autentikáció sikeres (vagy timeout esetén is folytatja).
+        """
+        try:
+            auth_event = asyncio.Event()
+            auth_result: list = [None]
+
+            def _notify_cb(sender: Any, data: bytes) -> None:
+                auth_result[0] = data.decode("utf-8", errors="replace").strip()
+                auth_event.set()
+
+            await self._client.start_notify(self.characteristic_uuid, _notify_cb)
+            try:
+                # 1. AUTH parancs küldése
                 try:
-                    await self._client.disconnect()
+                    await asyncio.wait_for(
+                        self._client.write_gatt_char(
+                            self.characteristic_uuid,
+                            f"AUTH:{self.pin_code}".encode("utf-8"),
+                        ),
+                        timeout=self.command_timeout,
+                    )
+                except asyncio.TimeoutError:
+                    logger.error("BLE AUTH write timeout")
+                    return False
+
+                # 2. Válasz megvárása
+                try:
+                    await asyncio.wait_for(
+                        auth_event.wait(), timeout=self.command_timeout
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("BLE AUTH válasz timeout - folytatás autentikáció nélkül")
+                    return True
+
+                # 3. Válasz kiértékelése
+                resp = auth_result[0]
+                if resp is None:
+                    logger.error("BLE AUTH: üres válasz")
+                    return False
+                if resp == "AUTH_OK":
+                    logger.info("BLE AUTH sikeres")
+                    return True
+                if resp in ("AUTH_FAIL", "AUTH_LOCKED"):
+                    logger.error(f"BLE AUTH sikertelen: {resp} - ellenorizd a pin_code erteket!")
+                    self._auth_failed = True
+                    try:
+                        await self._client.disconnect()
+                    except Exception:
+                        pass
+                    return False
+                # Ismeretlen válasz: engedékeny, folytatjuk
+                logger.warning(f"BLE AUTH ismeretlen válasz: {resp} - folytatás")
+                return True
+
+            finally:
+                # stop_notify egyszer fut le, akárhogy végződik a belső logika
+                try:
+                    await self._client.stop_notify(self.characteristic_uuid)
                 except Exception:
                     pass
-                return False
-            # Ismeretlen válasz: engedékeny, folytatjuk
-            logger.warning(f"BLE AUTH ismeretlen válasz: {resp} - folytatás")
-            return True
 
-        finally:
-            # stop_notify egyszer fut le, akárhogy végződik a belső logika
-            try:
-                await self._client.stop_notify(self.characteristic_uuid)
-            except Exception:
-                pass
-
-    except Exception as exc:
-        logger.error(f"BLE AUTH hiba: {exc}")
-        return False
+        except Exception as exc:
+            logger.error(f"BLE AUTH hiba: {exc}")
+            return False
 
     def _on_disconnect(self, client: Any) -> None:
         """Callback: BLE kapcsolat váratlan megszakadásakor."""
