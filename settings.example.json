@@ -45,6 +45,8 @@
     "resting_hr": 60,
     "zone_mode": "power_only",
     "z1_max_percent": 70,
-    "z2_max_percent": 80
+    "z2_max_percent": 80,
+    "valid_min_hr": 30,   
+    "valid_max_hr": 220
   }
 }

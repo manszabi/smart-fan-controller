@@ -40,6 +40,16 @@ import time
 from collections import deque
 from typing import Any, Dict, Optional, Tuple
 
+Node: Any = None
+ANTPLUS_NETWORK_KEY: Any = None
+PowerMeter: Any = None
+PowerData: Any = None
+HeartRate: Any = None
+HeartRateData: Any = None
+
+BleakClient: Any = None
+BleakScanner: Any = None
+
 # --- Külső könyvtárak (opcionális importok – a program importálható marad teszteléshez) ---
 try:
     from openant.easy.node import Node
@@ -114,6 +124,8 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
         "zone_mode": "power_only",
         "z1_max_percent": 70,
         "z2_max_percent": 80,
+        "valid_min_hr": 30,    # ← ÚJ: ez alatt fizikailag érvénytelen
+        "valid_max_hr": 220,   # ← ÚJ: ez felett fizikailag érvénytelen
     },
 }
 
@@ -221,6 +233,8 @@ def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
         _load_int(hrz, settings["heart_rate_zones"], "resting_hr", 30, 100)
         if hrz.get("zone_mode") in ("power_only", "hr_only", "higher_wins"):
             settings["heart_rate_zones"]["zone_mode"] = hrz["zone_mode"]
+        _load_int(hrz, settings["heart_rate_zones"], "valid_min_hr", 1, 60)
+        _load_int(hrz, settings["heart_rate_zones"], "valid_max_hr", 150, 300)
         _load_int(hrz, settings["heart_rate_zones"], "z1_max_percent", 1, 100)
         _load_int(hrz, settings["heart_rate_zones"], "z2_max_percent", 1, 100)
 
@@ -452,6 +466,26 @@ def is_valid_power(power: Any, min_watt: int, max_watt: int) -> bool:
         return False
     return True
 
+def is_valid_hr(hr: Any, valid_min_hr: int, valid_max_hr: int) -> bool:
+    """Ellenőrzi, hogy az érték érvényes szívfrekvencia adat-e.
+
+    Args:
+        hr: Az ellenőrizendő érték.
+        valid_min_hr: Minimális érvényes HR érték (bpm).
+        valid_max_hr: Maximális érvényes HR érték (bpm).
+
+    Returns:
+        True, ha érvényes HR adat.
+    """
+    if isinstance(hr, bool):
+        return False
+    if not isinstance(hr, (int, float)):
+        return False
+    if math.isnan(hr) or math.isinf(hr):
+        return False
+    if hr < valid_min_hr or hr > valid_max_hr:
+        return False
+    return True
 
 # ============================================================
 # TISZTA FÜGGVÉNYEK – ÁTLAGSZÁMÍTÁS
@@ -918,7 +952,7 @@ class BLEFanOutputController:
         Args:
             zone_queue: asyncio.Queue, amelyből a zóna parancsokat olvassa.
         """
-        if not _BLEAK_AVAILABLE:          # ← underscore nélkül, ahogy definiálva van
+        if not _BLEAK_AVAILABLE:
             logger.error("BLE Fan: bleak könyvtár nem elérhető – BLE kimenet letiltva!")
             return
 
@@ -929,21 +963,23 @@ class BLEFanOutputController:
             zone = await zone_queue.get()
             await self._send_zone(zone)
 
-
     async def _initial_connect(self) -> None:
         """Kezdeti BLE csatlakozás indításkor (hiba esetén folytatja)."""
         ok = await self._scan_and_connect()
         if not ok:
-            logger.warning("BLE Fan: kezdeti csatlakozás sikertelen, automatikus újrapróbálkozás parancs küldéskor.")
+            logger.warning(
+                "BLE Fan: kezdeti csatlakozás sikertelen, automatikus újrapróbálkozás parancs küldéskor."
+            )
 
     async def _scan_and_connect(self) -> bool:
-        if not _BLEAK_AVAILABLE:
-            return False
         """BLE eszköz keresése és csatlakozás.
 
         Returns:
             True, ha a csatlakozás sikeres.
         """
+        if not _BLEAK_AVAILABLE:
+            return False
+
         try:
             devices = await BleakScanner.discover(timeout=self.scan_timeout)
             for d in devices:
@@ -951,8 +987,10 @@ class BLEFanOutputController:
                     self._device_address = d.address
                     logger.info(f"BLE Fan eszköz megtalálva: {d.name} ({d.address})")
                     return await self._connect()
+
             logger.error(f"BLE Fan eszköz nem található: {self.device_name}")
             return False
+
         except Exception as exc:
             logger.error(f"BLE Fan keresési hiba: {exc}")
             return False
@@ -967,25 +1005,33 @@ class BLEFanOutputController:
             return False
         if not self._device_address:
             return False
+
         try:
-            if self._client and self._client.is_connected:
+            client = self._client
+            if client and client.is_connected:
                 return True
-            self._client = BleakClient(
+
+            client = BleakClient(
                 self._device_address,
                 timeout=self.connection_timeout,
                 disconnected_callback=self._on_disconnect,
             )
-            await self._client.connect()
+            self._client = client
+
+            await client.connect()
+
             if self.pin_code is not None:
                 ok = await self._authenticate()
                 if not ok:
                     return False
+
             self.is_connected = True
             self._retry_count = 0
             self._retry_reset_time = None
             self.last_sent = None
             logger.info(f"BLE Fan csatlakozva: {self._device_address}")
             return True
+
         except Exception as exc:
             logger.error(f"BLE Fan csatlakozási hiba: {exc}")
             self.is_connected = False
@@ -998,6 +1044,11 @@ class BLEFanOutputController:
         Returns:
             True, ha az autentikáció sikeres (vagy timeout esetén is folytatja).
         """
+        client = self._client
+        if client is None:
+            logger.error("BLE AUTH hiba: nincs aktív BLE kliens")
+            return False
+
         try:
             auth_event = asyncio.Event()
             auth_result: list = [None]
@@ -1006,12 +1057,11 @@ class BLEFanOutputController:
                 auth_result[0] = data.decode("utf-8", errors="replace").strip()
                 auth_event.set()
 
-            await self._client.start_notify(self.characteristic_uuid, _notify_cb)
+            await client.start_notify(self.characteristic_uuid, _notify_cb)
             try:
-                # 1. AUTH parancs küldése
                 try:
                     await asyncio.wait_for(
-                        self._client.write_gatt_char(
+                        client.write_gatt_char(
                             self.characteristic_uuid,
                             f"AUTH:{self.pin_code}".encode("utf-8"),
                         ),
@@ -1021,16 +1071,15 @@ class BLEFanOutputController:
                     logger.error("BLE AUTH write timeout")
                     return False
 
-                # 2. Válasz megvárása
                 try:
                     await asyncio.wait_for(
-                        auth_event.wait(), timeout=self.command_timeout
+                        auth_event.wait(),
+                        timeout=self.command_timeout,
                     )
                 except asyncio.TimeoutError:
                     logger.warning("BLE AUTH válasz timeout - folytatás autentikáció nélkül")
                     return True
 
-                # 3. Válasz kiértékelése
                 resp = auth_result[0]
                 if resp is None:
                     logger.error("BLE AUTH: üres válasz")
@@ -1039,21 +1088,22 @@ class BLEFanOutputController:
                     logger.info("BLE AUTH sikeres")
                     return True
                 if resp in ("AUTH_FAIL", "AUTH_LOCKED"):
-                    logger.error(f"BLE AUTH sikertelen: {resp} - ellenorizd a pin_code erteket!")
+                    logger.error(
+                        f"BLE AUTH sikertelen: {resp} - ellenorizd a pin_code erteket!"
+                    )
                     self._auth_failed = True
                     try:
-                        await self._client.disconnect()
+                        await client.disconnect()
                     except Exception:
                         pass
                     return False
-                # Ismeretlen válasz: engedékeny, folytatjuk
+
                 logger.warning(f"BLE AUTH ismeretlen válasz: {resp} - folytatás")
                 return True
 
             finally:
-                # stop_notify egyszer fut le, akárhogy végződik a belső logika
                 try:
-                    await self._client.stop_notify(self.characteristic_uuid)
+                    await client.stop_notify(self.characteristic_uuid)
                 except Exception:
                     pass
 
@@ -1077,12 +1127,15 @@ class BLEFanOutputController:
         if self._auth_failed:
             logger.error("BLE Fan: AUTH hiba, parancs elutasítva! Javítsd a pin_code-ot.")
             return
+
         if self.last_sent == zone and self.is_connected:
             return
+
         if not self.is_connected:
             ok = await self._reconnect()
             if not ok:
                 return
+
         await self._write_level(zone)
 
     async def _reconnect(self) -> bool:
@@ -1092,13 +1145,16 @@ class BLEFanOutputController:
             True, ha az újracsatlakozás sikeres.
         """
         now = time.monotonic()
+
         if self._retry_reset_time is not None:
             elapsed = now - self._retry_reset_time
             if elapsed >= self.RETRY_RESET_SECONDS:
                 self._retry_count = 0
                 self._retry_reset_time = None
             else:
-                await asyncio.sleep(min(self.RETRY_RESET_SECONDS - elapsed, self.reconnect_interval))
+                await asyncio.sleep(
+                    min(self.RETRY_RESET_SECONDS - elapsed, self.reconnect_interval)
+                )
                 return False
 
         if self._retry_count >= self.max_retries:
@@ -1111,7 +1167,10 @@ class BLEFanOutputController:
             return False
 
         self._retry_count += 1
-        logger.info(f"BLE Fan újracsatlakozás... ({self._retry_count}/{self.max_retries})")
+        logger.info(
+            f"BLE Fan újracsatlakozás... ({self._retry_count}/{self.max_retries})"
+        )
+
         if self._device_address:
             return await self._connect()
         return await self._scan_and_connect()
@@ -1123,9 +1182,10 @@ class BLEFanOutputController:
             zone: Ventilátor zóna szintje (0–3).
         """
         client = self._client
-        if not client or not client.is_connected:
+        if client is None or not client.is_connected:
             self.is_connected = False
             return
+
         try:
             msg = f"LEVEL:{zone}"
             await asyncio.wait_for(
@@ -1137,26 +1197,29 @@ class BLEFanOutputController:
             )
             self.last_sent = zone
             logger.info(f"BLE Fan parancs elküldve: {msg}")
+
         except asyncio.TimeoutError:
             logger.error(f"BLE Fan parancs küldés timeout ({self.command_timeout}s)")
             self.is_connected = False
+
         except Exception as exc:
             logger.error(f"BLE Fan küldési hiba: {exc}")
             self.is_connected = False
 
     async def disconnect(self) -> None:
         """Bontja a BLE kapcsolatot és felszabadítja a klienst."""
-        if self._client:
+        client = self._client
+        if client is not None:
             try:
                 await asyncio.wait_for(
-                    self._client.disconnect(), timeout=self.DISCONNECT_TIMEOUT
+                    client.disconnect(),
+                    timeout=self.DISCONNECT_TIMEOUT,
                 )
             except Exception:
                 pass
             finally:
                 self.is_connected = False
                 self._client = None
-
 
 # ============================================================
 # ANT+ BEMENŐ ADATKEZELÉS
@@ -1561,13 +1624,14 @@ class BLEHRInputHandler:
 # ============================================================
 
 class ZwiftUDPInputHandler:
-    """Zwift UDP adatforrás fogadó (asyncio DatagramProtocol alapú).
+    """Zwift UDP adatforrás fogadó – asyncio DatagramProtocol alapú.
 
     A zwift-udp-monitor programból érkező JSON csomagokat fogadja UDP-n.
-    Asyncio DatagramProtocol alapú implementáció – teljesen non-blocking.
+    Asyncio DatagramProtocol alapú implementáció, teljesen non-blocking.
     Érvényes power és HR értékeket az asyncio queue-kba teszi.
 
-    JSON formátum: {"power": <int>, "heartrate": <int>}
+    JSON formátum:
+        {"power": int, "heartrate": int}
 
     Attribútumok:
         process_power: True, ha a power adatokat kell feldolgozni.
@@ -1581,6 +1645,7 @@ class ZwiftUDPInputHandler:
         hr_queue: asyncio.Queue,
     ) -> None:
         ds = settings["data_source"]
+        self.settings = settings
         self.host: str = ds.get("zwift_udp_host", "127.0.0.1")
         self.port: int = ds.get("zwift_udp_port", 7878)
         self.power_queue = power_queue
@@ -1595,20 +1660,20 @@ class ZwiftUDPInputHandler:
         loop = asyncio.get_event_loop()
         logger.info(f"Zwift UDP fogadó elindítva: {self.host}:{self.port}")
 
-        handler = self  # closure
+        handler = self
 
         class _Protocol(asyncio.DatagramProtocol):
-            def connection_made(inner_self, transport: Any) -> None:
+            def connection_made(self, transport: Any) -> None:
                 logger.info(f"Zwift UDP socket kötve: {handler.host}:{handler.port}")
                 handler._transport = transport
 
-            def datagram_received(inner_self, data: bytes, addr: Tuple) -> None:
+            def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
                 handler._process_packet(data)
 
-            def error_received(inner_self, exc: Exception) -> None:
+            def error_received(self, exc: Exception) -> None:
                 logger.warning(f"Zwift UDP hiba: {exc}")
 
-            def connection_lost(inner_self, exc: Optional[Exception]) -> None:
+            def connection_lost(self, exc: Optional[Exception]) -> None:
                 logger.info("Zwift UDP kapcsolat lezárva")
 
         try:
@@ -1616,7 +1681,6 @@ class ZwiftUDPInputHandler:
                 _Protocol,
                 local_addr=(self.host, self.port),
             )
-            # Fut, amíg a task nincs megszakítva (CancelledError)
             try:
                 while True:
                     await asyncio.sleep(3600)
@@ -1641,6 +1705,7 @@ class ZwiftUDPInputHandler:
             data = json.loads(raw.decode("utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError):
             return
+
         if not isinstance(data, dict):
             return
 
@@ -1655,15 +1720,18 @@ class ZwiftUDPInputHandler:
                 logger.debug(f"Zwift UDP: érvénytelen power: {p}")
 
         if self.process_hr and "heartrate" in data:
+            hrz = self.settings.get("heart_rate_zones", {})
+            valid_min_hr: int = hrz.get("valid_min_hr", 30)
+            valid_max_hr: int = hrz.get("valid_max_hr", 220)
+
             h = data["heartrate"]
-            if isinstance(h, (int, float)) and not isinstance(h, bool) and 0 <= h <= 250:
+            if is_valid_hr(h, valid_min_hr, valid_max_hr):
                 try:
                     self.hr_queue.put_nowait(int(h))
                 except asyncio.QueueFull:
                     logger.debug("Zwift UDP: hr queue teli, adat elvetve")
             else:
                 logger.debug(f"Zwift UDP: érvénytelen heartrate: {h}")
-
 
 # ============================================================
 # POWER FELDOLGOZÓ KORRUTIN
@@ -1755,6 +1823,7 @@ async def hr_processor_task(
     settings: Dict[str, Any],
     hr_zones: Dict[str, int],
 ) -> None:
+    
     """HR adatok feldolgozása – validálás, átlagolás, állapot frissítés.
 
     Olvassa a raw_hr_queue-t, validálja a bpm értékeket, gördülő átlagot
@@ -1773,11 +1842,14 @@ async def hr_processor_task(
         settings: Betöltött beállítások dict-je.
         hr_zones: Kiszámított HR zóna határok.
     """
+    hrz = settings.get("heart_rate_zones", {})
     hr_enabled = settings.get("heart_rate_zones", {}).get("enabled", False)
     zone_mode = (
         settings["heart_rate_zones"].get("zone_mode", "power_only")
         if hr_enabled else "power_only"
     )
+    valid_min_hr: int = hrz.get("valid_min_hr", 30)
+    valid_max_hr: int = hrz.get("valid_max_hr", 220)
 
     logger.info("HR processor korrutin elindítva")
 
@@ -1788,7 +1860,7 @@ async def hr_processor_task(
             hr = int(hr)
         except (TypeError, ValueError):
             continue
-        if hr <= 0 or hr > 220:
+        if not is_valid_hr(hr, valid_min_hr, valid_max_hr):
             continue
 
         now = time.monotonic()
