@@ -34,7 +34,6 @@ import json
 import logging
 import math
 import signal
-import sys
 import threading
 import time
 import atexit
