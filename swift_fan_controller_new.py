@@ -1830,8 +1830,8 @@ async def hr_processor_task(
     számít, meghatározza a HR zónát, frissíti a megosztott állapotot, majd
     jelzi a zone_event-tel, hogy zóna újraszámítás szükséges.
 
-    hr_only módban az utolsó adatidőt (last_power_time) is frissíti,
-    hogy a dropout checker ne kapcsoljon Z0-ra.
+    Frissíti a state.last_hr_time mezőt, amelyet a dropout checker
+    hr_only és higher_wins módban figyelembe vesz.
 
     Args:
         raw_hr_queue: Nyers HR adatok asyncio.Queue-ja.
@@ -1987,20 +1987,14 @@ async def dropout_checker_task(
     power_averager: PowerAverager,   # ← új
     hr_averager: HRAverager,         # ← új
 ) -> None:
-    """Adatforrás kiesés detektálása és azonnali Z0 küldése.
+    """Adatforrás kiesés detektálása, Z0 küldése és pufferek ürítése.
 
-    Másodpercenként ellenőrzi, hogy érkezett-e adat a dropout_timeout-on belül.
-    
-    Ha nem, Z0-ra kapcsolja a ventilátort (LEVEL:0-t küld).
-    hr_only módban a last_hr_time-ot figyeli (amit a hr_processor_task
-    szinkronban tart a last_power_time-mal).
-    Megjegyzés: ez a feladat csak a dropout detektálását és a Z0 küldését
-    végzi, az átlagoló pufferek (PowerAverager/HRAverager) ürítését nem.
+    Dropout esetén:
+    - Z0-t küld a ventilátor felé
+    - Törli az érintett PowerAverager / HRAverager puffereket
+    - Reseteli a kapcsolódó state mezőket (avg_power, avg_hr, power_zone, hr_zone)
 
-    Args:
-        state: A megosztott vezérlő állapot.
-        zone_queue: BLE fan output asyncio.Queue-ja.
-        settings: Betöltött beállítások dict-je.
+    Így dropout után az első új átlag csak friss mintákból épül fel.
     """
     dropout_timeout = settings["dropout_timeout"]
     hr_enabled = settings.get("heart_rate_zones", {}).get("enabled", False)
@@ -2049,6 +2043,18 @@ async def dropout_checker_task(
 
             if stale:
                 print(f"⚠ Adatforrás kiesett ({label}, {elapsed:.1f}s) → LEVEL:0")
+
+                # Pufferek ürítése – régi minták ne keveredjenek az újba
+                if zone_mode in ("power_only", "higher_wins"):
+                    power_averager.clear()
+                    state.current_avg_power = None
+                    state.current_power_zone = None
+
+                if zone_mode in ("hr_only", "higher_wins"):
+                    hr_averager.clear()
+                    state.current_avg_hr = None
+                    state.current_hr_zone = None
+
                 state.current_zone = 0
                 send_dropout = True
 
