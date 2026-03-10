@@ -699,7 +699,7 @@ class CooldownController:
         # Zóna csökkentés → cooldown indul
         return self._start(current_zone, new_zone, now)
 
-    def _start(self, current_zone: int, new_zone: int, now: float) -> None:
+    def _start(self, current_zone: int, new_zone: int, now: float) -> Optional[int]:
         """Cooldown indítása zóna csökkentésnél."""
         self.active = True
         self.start_time = now
@@ -1505,13 +1505,12 @@ class BLEPowerInputHandler:
                     await asyncio.sleep(self.reconnect_interval)
 
     async def _scan_and_subscribe(self, loop: asyncio.AbstractEventLoop) -> None:
+        """BLE power meter keresése, csatlakozás, notification feliratkozás.
+        Args:
+        loop: A fő asyncio event loop (thread-safe put számára).
+        """
         if not _BLEAK_AVAILABLE:
             return
-        """BLE power meter keresése, csatlakozás, notification feliratkozás.
-
-        Args:
-            loop: A fő asyncio event loop (thread-safe put számára).
-        """
         logger.info(f"BLE Power keresés: {self.device_name}...")
         devices = await BleakScanner.discover(timeout=self.scan_timeout)
         addr = None
@@ -2080,7 +2079,7 @@ async def dropout_checker_task(
                 label   = "HR"
             else:  # higher_wins
                 stale   = not power_fresh and not hr_fresh
-                elapsed = min(
+                elapsed = max(
                     now - state.last_power_time,
                     now - state.last_hr_time if state.last_hr_time is not None else float("inf"),
                 )
@@ -2226,11 +2225,7 @@ class FanController:
             hr_buf["buffer_rate_hz"],
         )
         cooldown_ctrl = CooldownController(s["cooldown_seconds"])
-        printer      = ConsolePrinter()
-        loop         = asyncio.get_event_loop()
-        cooldown_ctrl = CooldownController(s["cooldown_seconds"])
         printer = ConsolePrinter()
-
         loop = asyncio.get_event_loop()
 
         # --- BLE Fan Output ---
