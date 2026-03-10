@@ -76,9 +76,9 @@ logger = logging.getLogger("swift_fan_controller_new")
 # ============================================================
 
 DEFAULT_SETTINGS: Dict[str, Any] = {
-    "ftp": 180,
-    "min_watt": 0,
-    "max_watt": 1000,
+    #"ftp": 180,
+    #"min_watt": 0,
+    #"max_watt": 1000,
     "cooldown_seconds": 120,
     "buffer_seconds": 3,        # globális fallback
     "minimum_samples": 6,       # globális fallback
@@ -86,6 +86,9 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "dropout_timeout": 5,       # globális fallback
     "zero_power_immediate": False,
     "zone_thresholds": {
+        "ftp": 180,
+        "min_watt": 0,
+        "max_watt": 1000,
         "z1_max_percent": 60,
         "z2_max_percent": 89,
     },
@@ -177,9 +180,9 @@ def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
         return settings
 
     # --- Egyszerű skaláris mezők ---
-    _load_int(loaded, settings, "ftp", 100, 500)
-    _load_int(loaded, settings, "min_watt", 0, 9999)
-    _load_int(loaded, settings, "max_watt", 1, 100000)
+    #_load_int(loaded, settings, "ftp", 100, 500)
+    #_load_int(loaded, settings, "min_watt", 0, 9999)
+    #_load_int(loaded, settings, "max_watt", 1, 100000)
     _load_int(loaded, settings, "cooldown_seconds", 0, 300)
     _load_int(loaded, settings, "buffer_seconds", 1, 10)
     _load_int(loaded, settings, "minimum_samples", 1, 1000)
@@ -190,6 +193,9 @@ def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
     # --- Zóna határok ---
     if isinstance(loaded.get("zone_thresholds"), dict):
         zt = loaded["zone_thresholds"]
+        _load_int(loaded, settings, "ftp", 100, 500)
+        _load_int(loaded, settings, "min_watt", 0, 9999)
+        _load_int(loaded, settings, "max_watt", 1, 100000)
         _load_int(zt, settings["zone_thresholds"], "z1_max_percent", 1, 100)
         _load_int(zt, settings["zone_thresholds"], "z2_max_percent", 1, 100)
 
@@ -292,6 +298,9 @@ def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
         zt = settings.get("zone_thresholds") or {}
         min_watt = zt.get("min_watt")
         max_watt = zt.get("max_watt")
+        if isinstance(min_watt, int) and isinstance(max_watt, int):
+            if min_watt > max_watt:
+                settings["min_watt"], settings["max_watt"] = max_watt, min_watt
         if isinstance(min_watt, int) and isinstance(max_watt, int):
             if min_watt > max_watt:
                 print(
@@ -1701,9 +1710,9 @@ class ZwiftUDPInputHandler:
         self.port: int = ds.get("zwift_udp_port", 7878)
         self.power_queue = power_queue
         self.hr_queue = hr_queue
-        self.process_power: bool = ds.get("power_source") == "zwift_udp"
+        self.process_power: bool = ds.get("power_source") == "zwiftudp"
         hr_enabled = settings.get("heart_rate_zones", {}).get("enabled", False)
-        self.process_hr: bool = ds.get("hr_source") == "zwift_udp" and hr_enabled
+        self.process_hr: bool = ds.get("hr_source") == "zwiftudp" and hr_enabled
         self._transport: Any = None
 
     async def run(self) -> None:
@@ -1812,8 +1821,8 @@ async def power_processor_task(
         settings: Betöltött beállítások dict-je.
         power_zones: Kiszámított power zóna határok.
     """
-    min_watt = settings["min_watt"]
-    max_watt = settings["max_watt"]
+    min_watt = settings["zone_thresholds"]["min_watt"]
+    max_watt = settings["zone_thresholds"]["max_watt"]
     hr_enabled = settings.get("heart_rate_zones", {}).get("enabled", False)
     zone_mode = (
         settings["heart_rate_zones"].get("zone_mode", "power_only")
@@ -2143,11 +2152,12 @@ class FanController:
         print(f"  Smart Fan Controller v{__version__}  |  Power+HR → BLE Fan")
         print("-" * 60)
         print(f"FTP: {s['ftp']}W  |  Érvényes tartomány: 0–{s['max_watt']}W")
-
+        
+        zt = s['zone_thresholds']
         power_zones = calculate_power_zones(
-            s['ftp'], s['min_watt'], s['max_watt'],
-            s['zone_thresholds']['z1_max_percent'],
-            s['zone_thresholds']['z2_max_percent']
+            zt['ftp'], zt['min_watt'], zt['max_watt'],
+            zt['z1_max_percent'],
+            zt['z2_max_percent'],
         )
         print(f"Zóna határok: {power_zones}")
 
@@ -2184,7 +2194,7 @@ class FanController:
 
         # --- Zóna határok kiszámítása ---
         power_zones = calculate_power_zones(
-            s["ftp"], s["min_watt"], s["max_watt"],
+            s["zone_thresholds"]["ftp"], s["zone_thresholds"]["min_watt"], s["zone_thresholds"]["max_watt"],
             s["zone_thresholds"]["z1_max_percent"],
             s["zone_thresholds"]["z2_max_percent"],
         )
@@ -2245,11 +2255,11 @@ class FanController:
                 ble_hr.run(), name="BLEHRInput"
             ))
 
-        needs_zwift = (power_source == "zwift_udp") or (hr_source == "zwift_udp" and hr_enabled)
+        needs_zwift = (power_source == "zwiftudp") or (hr_source == "zwiftudp" and hr_enabled)
         if needs_zwift:
-            zwift_udp = ZwiftUDPInputHandler(s, raw_power_queue, raw_hr_queue)
+            zwiftudp = ZwiftUDPInputHandler(s, raw_power_queue, raw_hr_queue)
             self._tasks.append(asyncio.create_task(
-                zwift_udp.run(), name="ZwiftUDPInput"
+                zwiftudp.run(), name="ZwiftUDPInput"
             ))
 
         needs_antplus = (power_source == "antplus") or (hr_source == "antplus" and hr_enabled)
