@@ -2128,38 +2128,47 @@ class FanController:
     def print_startup_info(self) -> None:
         """Kiírja az indítási konfigurációs összefoglalót."""
         s = self.settings
-        ds = s["data_source"]
+        ds = s["datasource"]
         hrz = s.get("heart_rate_zones", {})
-        print("=" * 60)
-        print(f"  Smart Fan Controller (Új) v{__version__} – Power/HR → BLE Fan")
-        print("=" * 60)
-        print(f"FTP: {s['ftp']}W | Érvényes tartomány: 0–{s['max_watt']}W")
+
+        # Forrás-specifikus buffer info
+        power_buf = _resolve_buffer_settings(s, "power")
+        hr_buf    = _resolve_buffer_settings(s, "hr")
+
+        # Zone mode számolása itt is
+        hr_enabled = hrz.get("enabled", False)
+        zone_mode = hrz.get("zone_mode", "power_only") if hr_enabled else "power_only"
+
+        print("-" * 60)
+        print(f"  Smart Fan Controller v{__version__}  |  Power+HR → BLE Fan")
+        print("-" * 60)
+        print(f"FTP: {s['ftp']}W  |  Érvényes tartomány: 0–{s['max_watt']}W")
+
         power_zones = calculate_power_zones(
-            s["ftp"], s["min_watt"], s["max_watt"],
-            s["zone_thresholds"]["z1_max_percent"],
-            s["zone_thresholds"]["z2_max_percent"],
+            s['ftp'], s['min_watt'], s['max_watt'],
+            s['zone_thresholds']['z1_max_percent'],
+            s['zone_thresholds']['z2_max_percent']
         )
         print(f"Zóna határok: {power_zones}")
-        print(
-            f"Buffer: {s['buffer_seconds']}s | "
-            f"Min. minták: {s['minimum_samples']} | "
-            f"Dropout: {s['dropout_timeout']}s | "
-            f"Cooldown: {s['cooldown_seconds']}s"
-        )
-        print(f"0W azonnali: {'Igen' if s['zero_power_immediate'] else 'Nem'}")
-        print(f"BLE Fan eszköz: {s['ble']['device_name']}")
-        if s["ble"].get("pin_code"):
+
+        # FORRÁs-SPECIFIKUS BUFFER INFO
+        print(f"💪 Power buffer ({ds['power_source'].upper()}): "
+            f"{power_buf['buffer_seconds']}s | "
+            f"minta: {power_buf['minimum_samples']} | "
+            f"rate: {power_buf['buffer_rate_hz']}Hz | "
+            f"dropout: {power_buf['dropout_timeout']}s")
+        print(f"❤️  HR buffer    ({ds['hr_source'].upper()}): "
+            f"{hr_buf['buffer_seconds']}s | "
+            f"minta: {hr_buf['minimum_samples']} | "
+            f"rate: {hr_buf['buffer_rate_hz']}Hz | "
+            f"dropout: {hr_buf['dropout_timeout']}s")
+
+        print(f"Cooldown: {s['cooldown_seconds']}s  |  "
+            f"0W azonnali: {'Igen' if s['zero_power_immediate'] else 'Nem'}")
+        print(f"BLE Fan: {s['ble']['device_name']}")
+        if s['ble'].get('pin_code'):
             print(f"BLE PIN: {'*' * len(str(s['ble']['pin_code']))}")
-        print(f"📡 Power forrás: {ds['power_source'].upper()} | HR forrás: {ds['hr_source'].upper()}")
-        if hrz.get("enabled"):
-            hr_zones = calculate_hr_zones(
-                hrz["max_hr"], hrz["resting_hr"],
-                hrz["z1_max_percent"], hrz["z2_max_percent"],
-            )
-            print(
-                f"HR zóna mód: {hrz.get('zone_mode', 'power_only')} | "
-                f"Határok: Z0<{hrz['resting_hr']}bpm, Z1<{hr_zones['z1_max']}bpm, Z2<{hr_zones['z2_max']}bpm"
-            )
+        print(f"Zónamód: {zone_mode if 'zone_mode' in locals() else 'power_only'}")
         print("-" * 60)
 
     async def run(self) -> None:
