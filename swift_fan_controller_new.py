@@ -279,7 +279,7 @@ def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
             if bs > 0 and brz > 0:
                 max_samples = bs * brz
                 if ms > max_samples:
-                    print(
+                    logger.warning(
                         f"⚠ [{prefix}] Érvénytelen minimum_samples ({ms}) – "
                         f"nagyobb, mint buffer_seconds * buffer_rate_hz "
                         f"({bs} * {brz} = {max_samples}). "
@@ -287,28 +287,27 @@ def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
                     )
                     ds_cfg[f"{prefix}_minimum_samples"] = max_samples
     except Exception as exc:
-        print(f"⚠ minimum_samples/buffer_seconds kereszt-validáció sikertelen: {exc}")
+        logger.warning(f"⚠ minimum_samples/buffer_seconds kereszt-validáció sikertelen: {exc}")
 
     # 2) Power zóna: min_watt < max_watt
     try:
-        zt = settings.get("zone_thresholds") or {}
         min_watt = settings.get("min_watt")
         max_watt = settings.get("max_watt")
         if isinstance(min_watt, int) and isinstance(max_watt, int):
             if min_watt > max_watt:
-                print(
-                    f"⚠ Érvénytelen watt tartomány (min_watt={min_watt}, max_watt={max_watt}). "
-                    f"Feltételezett felcserélés, értékek megfordítva."
+                logger.warning(
+                    f"Érvénytelen watt tartomány (min_watt={min_watt}, "
+                    f"max_watt={max_watt}). Értékek megfordítva."
                 )
-                zt["min_watt"], zt["max_watt"] = max_watt, min_watt
+                settings["min_watt"], settings["max_watt"] = max_watt, min_watt
             elif min_watt == max_watt:
-                print(
-                    f"⚠ min_watt és max_watt azonos értékű ({min_watt}). "
+                logger.warning(
+                    f"min_watt és max_watt azonos értékű ({min_watt}). "
                     f"max_watt {min_watt + 1}-re állítva."
                 )
-                zt["max_watt"] = min_watt + 1
+                settings["max_watt"] = min_watt + 1
     except Exception as exc:
-        print(f"⚠ Watt zóna kereszt-validáció sikertelen: {exc}")
+        logger.warning(f"Watt zóna kereszt-validáció sikertelen: {exc}")
 
     # 3) HR zónák: z1_max_percent < z2_max_percent és resting_hr < max_hr
     try:
@@ -317,7 +316,7 @@ def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
         z2p = hrz.get("z2_max_percent")
         if isinstance(z1p, int) and isinstance(z2p, int):
             if z1p >= z2p:
-                print(
+                logger.warning(
                     f"⚠ Érvénytelen HR zóna százalékok (z1_max_percent={z1p}, z2_max_percent={z2p}). "
                     f"Értékek rendezése és legalább 1% különbség biztosítása."
                 )
@@ -332,13 +331,13 @@ def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
         if isinstance(max_hr, int) and isinstance(resting_hr, int):
             if resting_hr >= max_hr:
                 new_rest = max(30, max_hr - 1)
-                print(
+                logger.warning(
                     f"⚠ Érvénytelen HR értékek (resting_hr={resting_hr}, max_hr={max_hr}). "
                     f"resting_hr {new_rest}-re állítva, hogy resting_hr < max_hr legyen."
                 )
                 hrz["resting_hr"] = new_rest
     except Exception as exc:
-        print(f"⚠ HR zóna kereszt-validáció sikertelen: {exc}")
+        logger.warning(f"⚠ HR zóna kereszt-validáció sikertelen: {exc}")
 
     return settings
 
@@ -350,7 +349,7 @@ def _load_int(src: dict, dst: dict, key: str, lo: int, hi: int) -> None:
         if isinstance(v, (int, float)) and not isinstance(v, bool) and lo <= v <= hi:
             dst[key] = int(v)
         else:
-            print(f"⚠ Érvénytelen '{key}' érték: {v} ({lo}–{hi} közötti egész kell)")
+            logger.warning(f"⚠ Érvénytelen '{key}' érték: {v} ({lo}–{hi} közötti egész kell)")
 
 
 def _load_bool(src: dict, dst: dict, key: str) -> None:
@@ -359,7 +358,7 @@ def _load_bool(src: dict, dst: dict, key: str) -> None:
         if isinstance(src[key], bool):
             dst[key] = src[key]
         else:
-            print(f"⚠ Érvénytelen '{key}' érték: {src[key]} (true/false kell)")
+            logger.warning(f"⚠ Érvénytelen '{key}' érték: {src[key]} (true/false kell)")
 
 
 def _save_default_settings(path: str, settings: Dict[str, Any]) -> None:
