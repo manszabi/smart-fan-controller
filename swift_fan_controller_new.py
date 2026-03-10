@@ -2097,231 +2097,146 @@ async def dropout_checker_task(
 # FAN CONTROLLER – FŐ ÖSSZEHANGOLÁS
 # ============================================================
 
-class FanController:
-    """A Smart Fan Controller fő orchestrátora.
+async def run(self) -> None:
+    """A vezérlő fő asyncio korrutinja – elindít mindent és vár."""
+    s = self.settings
+    ds = s["datasource"]
+    hr_enabled = s.get("heart_rate_zones", {}).get("enabled", False)
+    if hr_enabled:
+        zone_mode = s["heart_rate_zones"].get("zone_mode", "power_only")
+    else:
+        zone_mode = "power_only"
 
-    Összefogja az összes komponenst, elindítja az asyncio task-okat
-    és a szálakat, és gondoskodik a tiszta leállításról.
+    # --- Zóna határok kiszámítása ---
+    power_zones = calculate_power_zones(
+        s["ftp"], s["min_watt"], s["max_watt"],
+        s["zone_thresholds"]["z1_max_percent"],
+        s["zone_thresholds"]["z2_max_percent"],
+    )
+    hr_zones = calculate_hr_zones(
+        s["heart_rate_zones"]["max_hr"],
+        s["heart_rate_zones"]["resting_hr"],
+        s["heart_rate_zones"]["z1_max_percent"],
+        s["heart_rate_zones"]["z2_max_percent"],
+    ) if hr_enabled else {"resting": 60, "z1_max": 130, "z2_max": 148}
 
-    Indítási sorrend:
-        1. Beállítások betöltése
-        2. Zóna határok kiszámítása
-        3. Átlagolók, cooldown, printer létrehozása
-        4. BLE fan output asyncio task indítása
-        5. BLE power/HR input asyncio task-ok indítása (ha szükséges)
-        6. Zwift UDP input asyncio task indítása (ha szükséges)
-        7. ANT+ szál indítása (ha szükséges)
-        8. Power/HR processor asyncio task-ok indítása
-        9. Zone controller asyncio task indítása
-        10. Dropout checker asyncio task indítása
-        11. Főciklus: Ctrl+C / SIGTERM megvárása
-        12. Leállítás: minden task és szál leállítása
-    """
+    # --- Komponensek létrehozása ---
+    raw_power_queue: asyncio.Queue = asyncio.Queue()
+    raw_hr_queue: asyncio.Queue = asyncio.Queue()
+    zone_cmd_queue: asyncio.Queue = asyncio.Queue(maxsize=1)
+    zone_event = asyncio.Event()
 
-    def __init__(self, settings_file: str = "settings.json") -> None:
-        self.settings = load_settings(settings_file)
-        self._antplus_handler: Optional[ANTPlusInputHandler] = None
-        self._antplus_thread: Optional[threading.Thread] = None
-        self._tasks: list = []
-        self._running = True
+    state = ControllerState()
+    power_buf = _resolve_buffer_settings(s, "power")
+    hr_buf    = _resolve_buffer_settings(s, "hr")
 
-    def print_startup_info(self) -> None:
-        """Kiírja az indítási konfigurációs összefoglalót."""
-        s = self.settings
-        ds = s["datasource"]
-        hrz = s.get("heart_rate_zones", {})
+    # HIGHER_WINS automatikus merge – itt is!
+    if zone_mode == "higher_wins":
+        merged = {
+            "buffer_seconds":   max(power_buf["buffer_seconds"],   hr_buf["buffer_seconds"]),
+            "minimum_samples":  max(power_buf["minimum_samples"],  hr_buf["minimum_samples"]),
+            "buffer_rate_hz":   max(power_buf["buffer_rate_hz"],   hr_buf["buffer_rate_hz"]),
+            "dropout_timeout":  max(power_buf["dropout_timeout"],  hr_buf["dropout_timeout"]),
+        }
+        power_buf = hr_buf = merged
+        print("🔄 HIGHER_WINS: mindkét forrás ugyanazt a konzervatív buffert kapja")
 
-        # Forrás-specifikus buffer info
-        power_buf = _resolve_buffer_settings(s, "power")
-        hr_buf    = _resolve_buffer_settings(s, "hr")
+    power_averager = PowerAverager(
+        power_buf["buffer_seconds"],
+        power_buf["minimum_samples"],
+        power_buf["buffer_rate_hz"],
+    )
+    hr_averager = HRAverager(
+        hr_buf["buffer_seconds"],
+        hr_buf["minimum_samples"],
+        hr_buf["buffer_rate_hz"],
+    )
+    cooldown_ctrl = CooldownController(s["cooldown_seconds"])
+    printer       = ConsolePrinter()
+    loop          = asyncio.get_event_loop()
 
-        # Zone mode számolása itt is
-        hr_enabled = hrz.get("enabled", False)
-        zone_mode = hrz.get("zone_mode", "power_only") if hr_enabled else "power_only"
+    # --- BLE Fan Output ---
+    ble_fan = BLEFanOutputController(s)
+    self._tasks.append(asyncio.create_task(
+        ble_fan.run(zone_cmd_queue), name="BLEFanOutput"
+    ))
 
-        print("-" * 60)
-        print(f"  Smart Fan Controller v{__version__}  |  Power+HR → BLE Fan")
-        print("-" * 60)
-        print(f"FTP: {s['ftp']}W  |  Érvényes tartomány: 0–{s['max_watt']}W")
+    # --- Bemeneti adatforrások ---
+    power_source = ds.get("power_source", "antplus")
+    hr_source    = ds.get("hr_source", "antplus")
 
-        power_zones = calculate_power_zones(
-            s['ftp'], s['min_watt'], s['max_watt'],
-            s['zone_thresholds']['z1_max_percent'],
-            s['zone_thresholds']['z2_max_percent']
-        )
-        print(f"Zóna határok: {power_zones}")
+    if power_source == "ble":
+        ble_power = BLEPowerInputHandler(s, raw_power_queue)
+        self._tasks.append(asyncio.create_task(
+            ble_power.run(), name="BLEPowerInput"
+        ))
 
-        # FORRÁs-SPECIFIKUS BUFFER INFO
-        print(f"💪 Power buffer ({ds['power_source'].upper()}): "
-            f"{power_buf['buffer_seconds']}s | "
-            f"minta: {power_buf['minimum_samples']} | "
-            f"rate: {power_buf['buffer_rate_hz']}Hz | "
-            f"dropout: {power_buf['dropout_timeout']}s")
-        print(f"❤️  HR buffer    ({ds['hr_source'].upper()}): "
-            f"{hr_buf['buffer_seconds']}s | "
-            f"minta: {hr_buf['minimum_samples']} | "
-            f"rate: {hr_buf['buffer_rate_hz']}Hz | "
-            f"dropout: {hr_buf['dropout_timeout']}s")
+    if hr_source == "ble" and hr_enabled:
+        ble_hr = BLEHRInputHandler(s, raw_hr_queue)
+        self._tasks.append(asyncio.create_task(
+            ble_hr.run(), name="BLEHRInput"
+        ))
 
-        print(f"Cooldown: {s['cooldown_seconds']}s  |  "
-            f"0W azonnali: {'Igen' if s['zero_power_immediate'] else 'Nem'}")
-        print(f"BLE Fan: {s['ble']['device_name']}")
-        if s['ble'].get('pin_code'):
-            print(f"BLE PIN: {'*' * len(str(s['ble']['pin_code']))}")
-        print(f"Zónamód: {zone_mode if 'zone_mode' in locals() else 'power_only'}")
-        print("-" * 60)
+    needs_zwift = (power_source == "zwift_udp") or (hr_source == "zwift_udp" and hr_enabled)
+    if needs_zwift:
+        zwift_udp = ZwiftUDPInputHandler(s, raw_power_queue, raw_hr_queue)
+        self._tasks.append(asyncio.create_task(
+            zwift_udp.run(), name="ZwiftUDPInput"
+        ))
 
-    async def run(self) -> None:
-        """A vezérlő fő asyncio korrutinja – elindít mindent és vár."""
-        s = self.settings
-        ds = s["datasource"]
-        hr_enabled = s.get("heart_rate_zones", {}).get("enabled", False)
-        if hr_enabled:
-            zone_mode = s["heart_rate_zones"].get("zone_mode", "power_only")
+    needs_antplus = (power_source == "antplus") or (hr_source == "antplus" and hr_enabled)
+    if needs_antplus:
+        if _ANTPLUS_AVAILABLE:
+            self._antplus_handler = ANTPlusInputHandler(
+                s, raw_power_queue, raw_hr_queue, loop
+            )
+            self._antplus_thread = self._antplus_handler.start()
         else:
-            zone_mode = "power_only"
+            logger.warning("ANT+ forrás kérve, de az openant könyvtár nem elérhető!")
 
+    # --- Feldolgozó és vezérlő korrutinok ---
+    self._tasks.append(asyncio.create_task(
+        power_processor_task(
+            raw_power_queue, state, zone_event,
+            power_averager, printer, s, power_zones,
+        ), name="PowerProcessor"
+    ))
+    self._tasks.append(asyncio.create_task(
+        hr_processor_task(
+            raw_hr_queue, state, zone_event,
+            hr_averager, printer, s, hr_zones,
+        ), name="HRProcessor"
+    ))
+    self._tasks.append(asyncio.create_task(
+        zone_controller_task(
+            state, zone_cmd_queue, cooldown_ctrl, s, zone_event,
+        ), name="ZoneController"
+    ))
+    self._tasks.append(asyncio.create_task(
+        dropout_checker_task(
+            state, zone_cmd_queue, s,
+            power_averager, hr_averager,
+            power_buf["dropout_timeout"],
+            hr_buf["dropout_timeout"],
+            zone_mode,
+        ),
+        name="DropoutChecker"
+    ))
 
-        # --- Zóna határok kiszámítása ---
-        power_zones = calculate_power_zones(
-            s["ftp"], s["min_watt"], s["max_watt"],
-            s["zone_thresholds"]["z1_max_percent"],
-            s["zone_thresholds"]["z2_max_percent"],
-        )
-        hr_zones = calculate_hr_zones(
-            s["heart_rate_zones"]["max_hr"],
-            s["heart_rate_zones"]["resting_hr"],
-            s["heart_rate_zones"]["z1_max_percent"],
-            s["heart_rate_zones"]["z2_max_percent"],
-        ) if hr_enabled else {"resting": 60, "z1_max": 130, "z2_max": 148}
+    print()
+    print("🚴 Figyelés elindítva... (Ctrl+C a leállításhoz)")
+    print()
 
-        # --- Komponensek létrehozása ---
-        raw_power_queue: asyncio.Queue = asyncio.Queue()
-        raw_hr_queue: asyncio.Queue = asyncio.Queue()
-        zone_cmd_queue: asyncio.Queue = asyncio.Queue(maxsize=1)
-        zone_event = asyncio.Event()
-
-        state = ControllerState()
-        power_buf = _resolve_buffer_settings(s, "power")
-        hr_buf    = _resolve_buffer_settings(s, "hr")
-
-        power_averager = PowerAverager(
-            power_buf["buffer_seconds"],
-            power_buf["minimum_samples"],
-            power_buf["buffer_rate_hz"],
-        )
-        hr_averager = HRAverager(
-            hr_buf["buffer_seconds"],
-            hr_buf["minimum_samples"],
-            hr_buf["buffer_rate_hz"],
-        )
-        cooldown_ctrl = CooldownController(s["cooldown_seconds"])
-        printer      = ConsolePrinter()
-        loop         = asyncio.get_event_loop()
-        cooldown_ctrl = CooldownController(s["cooldown_seconds"])
-        printer = ConsolePrinter()
-
-        loop = asyncio.get_event_loop()
-
-        # --- BLE Fan Output ---
-        ble_fan = BLEFanOutputController(s)
-        self._tasks.append(asyncio.create_task(
-            ble_fan.run(zone_cmd_queue), name="BLEFanOutput"
-        ))
-
-        # --- Bemeneti adatforrások ---
-        power_source = ds.get("power_source", "antplus")
-        hr_source = ds.get("hr_source", "antplus")
-
-        if power_source == "ble":
-            ble_power = BLEPowerInputHandler(s, raw_power_queue)
-            self._tasks.append(asyncio.create_task(
-                ble_power.run(), name="BLEPowerInput"
-            ))
-
-        if hr_source == "ble" and hr_enabled:
-            ble_hr = BLEHRInputHandler(s, raw_hr_queue)
-            self._tasks.append(asyncio.create_task(
-                ble_hr.run(), name="BLEHRInput"
-            ))
-
-        needs_zwift = (power_source == "zwift_udp") or (hr_source == "zwift_udp" and hr_enabled)
-        if needs_zwift:
-            zwift_udp = ZwiftUDPInputHandler(s, raw_power_queue, raw_hr_queue)
-            self._tasks.append(asyncio.create_task(
-                zwift_udp.run(), name="ZwiftUDPInput"
-            ))
-
-        needs_antplus = (power_source == "antplus") or (hr_source == "antplus" and hr_enabled)
-        if needs_antplus:
-            if _ANTPLUS_AVAILABLE:
-                self._antplus_handler = ANTPlusInputHandler(
-                    s, raw_power_queue, raw_hr_queue, loop
-                )
-                self._antplus_thread = self._antplus_handler.start()
-            else:
-                logger.warning("ANT+ forrás kérve, de az openant könyvtár nem elérhető!")
-
-                # --- power_buf és hr_buf már korábban létrejöttek (4. lépés) ---
-
-        # --- Feldolgozó és vezérlő korrutinok ---
-        self._tasks.append(asyncio.create_task(
-            power_processor_task(
-                raw_power_queue, state, zone_event,
-                power_averager, printer, s, power_zones,
-            ), name="PowerProcessor"
-        ))
-        self._tasks.append(asyncio.create_task(
-            hr_processor_task(
-                raw_hr_queue, state, zone_event,
-                hr_averager, printer, s, hr_zones,
-            ), name="HRProcessor"
-        ))
-        self._tasks.append(asyncio.create_task(
-            zone_controller_task(
-                state, zone_cmd_queue, cooldown_ctrl, s, zone_event,
-            ), name="ZoneController"
-        ))
-        self._tasks.append(asyncio.create_task(
-            dropout_checker_task(
-                state, zone_cmd_queue, s,
-                power_averager, hr_averager,
-                power_buf["dropout_timeout"],
-                hr_buf["dropout_timeout"],
-                zone_mode,
-            ),
-            name="DropoutChecker"
-        ))
-
-        print()
-        print("🚴 Figyelés elindítva... (Ctrl+C a leállításhoz)")
-        print()
-
-        try:
-            await asyncio.gather(*self._tasks)
-        except asyncio.CancelledError:
-            pass
-        finally:
-            await ble_fan.disconnect()
-            # ANT leállítása is itt, ha még fut:
-            if self._antplus_handler:
-                self._antplus_handler.stop()
-            if self._antplus_thread and self._antplus_thread.is_alive():
-                self._antplus_thread.join(timeout=5.0)
-
-
-    def stop(self) -> None:
-        """Leállítja az összes asyncio task-ot és az ANT+ szálat."""
-        for task in self._tasks:
-            task.cancel()
+    try:
+        await asyncio.gather(*self._tasks)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        await ble_fan.disconnect()
         if self._antplus_handler:
             self._antplus_handler.stop()
         if self._antplus_thread and self._antplus_thread.is_alive():
-            self._antplus_thread.join(timeout=5.0)   # ← ÚJ: max 5s-t vár
-            if self._antplus_thread.is_alive():
-                logger.warning("ANT+ szál nem állt le 5s alatt!")
-
-
+            self._antplus_thread.join(timeout=5.0)
 
 # ============================================================
 # MAIN
