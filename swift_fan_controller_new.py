@@ -1981,7 +1981,11 @@ async def zone_controller_task(
         if hr_enabled else "power_only"
     )
     zero_immediate = settings.get("zero_power_immediate", False)
-    dropout_timeout = settings["dropout_timeout"]
+    #dropout_timeout = settings["dropout_timeout"]
+    power_buf = _resolve_buffer_settings(settings, "power")
+    hr_buf    = _resolve_buffer_settings(settings, "hr")
+    power_dropout_timeout = power_buf["dropout_timeout"]
+    hr_dropout_timeout    = hr_buf["dropout_timeout"]
 
     logger.info("Zóna vezérlő korrutin elindítva")
 
@@ -1999,8 +2003,8 @@ async def zone_controller_task(
             last_hr = state.last_hr_time
 
         # Frissesség ellenőrzése (dropout figyelembe vételéhez)
-        power_fresh = (now - last_power) < dropout_timeout
-        hr_fresh = last_hr is not None and (now - last_hr) < dropout_timeout
+        power_fresh = (now - last_power) < power_dropout_timeout
+        hr_fresh = last_hr is not None and (now - last_hr) < hr_dropout_timeout
 
         # Zóna kombinálás a zone_mode alapján
         if zone_mode == "power_only":
@@ -2091,13 +2095,14 @@ async def dropout_checker_task(
 
             if stale:
                 print(f"Adatforrás kiesett ({label}), {elapsed:.1f}s → LEVEL:0")
-                if zone_mode in ("power_only", "higher_wins"):
+                # Csak a valóban kiesett forrást törli
+                if not power_fresh:
                     poweraverager.clear()
-                    state.current_avg_power  = None
+                    state.current_avg_power = None
                     state.current_power_zone = None
-                if zone_mode in ("hr_only", "higher_wins"):
+                if not hr_fresh:
                     hraverager.clear()
-                    state.current_avg_hr  = None
+                    state.current_avg_hr = None
                     state.current_hr_zone = None
                 state.current_zone = 0
                 send_dropout = True
@@ -2154,7 +2159,7 @@ class FanController:
         print("-" * 60)
         print(f"  Smart Fan Controller v{__version__}  |  Power+HR → BLE Fan")
         print("-" * 60)
-        zt = s['zone_thresholds']
+        zt = s["zone_thresholds"]
         print(f"FTP: {zt['ftp']}W | Érvényes tartomány: 0–{zt['max_watt']}W")
         
         zt = s['zone_thresholds']
