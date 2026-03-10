@@ -1301,7 +1301,7 @@ class ANTPlusInputHandler:
         loop: asyncio.AbstractEventLoop,
     ) -> None:
         self.settings = settings
-        self.ds = settings["data_source"]
+        self.ds = settings["datasource"]
         self.hr_enabled = settings.get("heart_rate_zones", {}).get("enabled", False)
         self.power_queue = power_queue
         self.hr_queue = hr_queue
@@ -1452,7 +1452,7 @@ class BLEPowerInputHandler:
     RETRY_RESET_SECONDS = 30
 
     def __init__(self, settings: Dict[str, Any], power_queue: asyncio.Queue) -> None:
-        ds = settings["data_source"]
+        ds = settings["datasource"]
         self.device_name: Optional[str] = ds.get("ble_power_device_name")
         self.scan_timeout: int = ds.get("ble_power_scan_timeout", 10)
         self.reconnect_interval: int = ds.get("ble_power_reconnect_interval", 5)
@@ -1569,7 +1569,7 @@ class BLEHRInputHandler:
     RETRY_RESET_SECONDS = 30
 
     def __init__(self, settings: Dict[str, Any], hr_queue: asyncio.Queue) -> None:
-        ds = settings["data_source"]
+        ds = settings["datasource"]
         self.device_name: Optional[str] = ds.get("ble_hr_device_name")
         self.scan_timeout: int = ds.get("ble_hr_scan_timeout", 10)
         self.reconnect_interval: int = ds.get("ble_hr_reconnect_interval", 5)
@@ -1695,7 +1695,7 @@ class ZwiftUDPInputHandler:
         power_queue: asyncio.Queue,
         hr_queue: asyncio.Queue,
     ) -> None:
-        ds = settings["data_source"]
+        ds = settings["datasource"]
         self.settings = settings
         self.host: str = ds.get("zwift_udp_host", "127.0.0.1")
         self.port: int = ds.get("zwift_udp_port", 7878)
@@ -2174,7 +2174,7 @@ class FanController:
     async def run(self) -> None:
         """A vezérlő fő asyncio korrutinja – elindít mindent és vár."""
         s = self.settings
-        ds = s["data_source"]
+        ds = s["datasource"]
         hr_enabled = s.get("heart_rate_zones", {}).get("enabled", False)
         if hr_enabled:
             zone_mode = s["heart_rate_zones"].get("zone_mode", "power_only")
