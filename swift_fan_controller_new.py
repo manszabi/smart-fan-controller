@@ -40,17 +40,9 @@ import atexit
 from collections import deque
 from typing import Any, Dict, Optional, Tuple
 
-Node: Any = None
-ANTPLUS_NETWORK_KEY: Any = None
-PowerMeter: Any = None
-PowerData: Any = None
-HeartRate: Any = None
-HeartRateData: Any = None
+from typing import TYPE_CHECKING
 
-BleakClient: Any = None
-BleakScanner: Any = None
-
-# --- Külső könyvtárak (opcionális importok – a program importálható marad teszteléshez) ---
+# --- Opcionális runtime importok ---
 try:
     from openant.easy.node import Node
     from openant.devices import ANTPLUS_NETWORK_KEY
@@ -65,6 +57,16 @@ try:
     _BLEAK_AVAILABLE = True
 except ImportError:
     _BLEAK_AVAILABLE = False
+
+# --- Csak típusellenőrzőknek (mypy/Pylance), futáskor nem fut le ---
+if TYPE_CHECKING:
+    if not _ANTPLUS_AVAILABLE:
+        from openant.easy.node import Node
+        from openant.devices import ANTPLUS_NETWORK_KEY
+        from openant.devices.power_meter import PowerMeter, PowerData
+        from openant.devices.heart_rate import HeartRate, HeartRateData
+    if not _BLEAK_AVAILABLE:
+        from bleak import BleakClient, BleakScanner
 
 __version__ = "1.0.0"
 
@@ -290,8 +292,8 @@ def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
     # 2) Power zóna: min_watt < max_watt
     try:
         zt = settings.get("zone_thresholds") or {}
-        min_watt = zt.get("min_watt")
-        max_watt = zt.get("max_watt")
+        min_watt = settings.get("min_watt")
+        max_watt = settings.get("max_watt")
         if isinstance(min_watt, int) and isinstance(max_watt, int):
             if min_watt > max_watt:
                 print(
