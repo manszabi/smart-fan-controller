@@ -193,9 +193,9 @@ def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
     # --- Zóna határok ---
     if isinstance(loaded.get("zone_thresholds"), dict):
         zt = loaded["zone_thresholds"]
-        _load_int(loaded, settings, "ftp", 100, 500)
-        _load_int(loaded, settings, "min_watt", 0, 9999)
-        _load_int(loaded, settings, "max_watt", 1, 100000)
+        _load_int(zt, settings["zone_thresholds"], "ftp", 100, 500)
+        _load_int(zt, settings["zone_thresholds"], "min_watt", 0, 9999)
+        _load_int(zt, settings["zone_thresholds"], "max_watt", 1, 100000)
         _load_int(zt, settings["zone_thresholds"], "z1_max_percent", 1, 100)
         _load_int(zt, settings["zone_thresholds"], "z2_max_percent", 1, 100)
 
@@ -298,9 +298,6 @@ def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
         zt = settings.get("zone_thresholds") or {}
         min_watt = zt.get("min_watt")
         max_watt = zt.get("max_watt")
-        if isinstance(min_watt, int) and isinstance(max_watt, int):
-            if min_watt > max_watt:
-                settings["min_watt"], settings["max_watt"] = max_watt, min_watt
         if isinstance(min_watt, int) and isinstance(max_watt, int):
             if min_watt > max_watt:
                 print(
@@ -472,25 +469,18 @@ def calculate_hr_zones(
         "z2_max": int(max_hr * z2_pct / 100),
     }
 
-
 def zone_for_power(power: float, zones: Dict[int, Tuple[int, int]]) -> int:
-    """Meghatározza a teljesítmény zónát (0–3) az adott wattértékhez.
-
-    Args:
-        power: Teljesítmény wattban.
-        zones: Zóna határok dict-je (calculate_power_zones kimenetele).
-
-    Returns:
-        Zóna szám (0–3).
-    """
-    if power == 0:
+    if power <= 0:
+        return 0
+    # Ha power kisebb, mint a legkisebb pozitív zóna alsó határa → Z0
+    min_lo = min(lo for lo, hi in zones.values() if lo > 0)
+    if power < min_lo:
         return 0
     for zone_num in sorted(zones):
         lo, hi = zones[zone_num]
         if lo <= power <= hi:
             return zone_num
-    return 3
-
+    return 3  # csak max_watt felett érthető el
 
 def zone_for_hr(hr: int, hr_zones: Dict[str, int]) -> int:
     """Meghatározza a HR zónát (0–3) az adott bpm értékhez.
@@ -1621,13 +1611,13 @@ class BLEHRInputHandler:
                     await asyncio.sleep(self.reconnect_interval)
 
     async def _scan_and_subscribe(self, loop: asyncio.AbstractEventLoop) -> None:
-        if not _BLEAK_AVAILABLE:
-            return
         """BLE HR eszköz keresése, csatlakozás, notification feliratkozás.
 
         Args:
             loop: A fő asyncio event loop (thread-safe put számára).
         """
+        if not _BLEAK_AVAILABLE:
+            return
         logger.info(f"BLE HR keresés: {self.device_name}...")
         devices = await BleakScanner.discover(timeout=self.scan_timeout)
         addr = None
@@ -2075,15 +2065,29 @@ async def dropout_checker_task(
             elif zone_mode == "hr_only":
                 elapsed = (now - state.last_hr_time
                         if state.last_hr_time is not None else float("inf"))
-                stale   = not hr_fresh
+                stale = not hr_fresh and state.last_hr_time is not None
                 label   = "HR"
             else:  # higher_wins
-                stale   = not power_fresh and not hr_fresh
-                elapsed = max(
-                    now - state.last_power_time,
-                    now - state.last_hr_time if state.last_hr_time is not None else float("inf"),
-                )
-                label   = "power+HR"
+                stale = not power_fresh and not hr_fresh
+
+                # elapsed: csak a valóban kiesett források közül a legelső kiesési időt mutatja.
+                # Ha stale=False, az elapsed csak log célra kerül kiírásra, de így is legyen pontos.
+                if stale:
+                    # Mindkét forrás kiesett → a régebben kiesett számít
+                    elapsed = max(
+                        now - state.last_power_time,
+                        now - state.last_hr_time if state.last_hr_time is not None else float("inf"),
+                    )
+                elif not power_fresh:
+                    # Csak a power esett ki (HR még friss) → power kiesési ideje
+                    elapsed = now - state.last_power_time
+                elif not hr_fresh:
+                    # Csak a HR esett ki (power még friss) → HR kiesési ideje
+                    elapsed = now - state.last_hr_time if state.last_hr_time is not None else float("inf")
+                else:
+                    # Mindkettő friss – elapsed nem releváns (stale=False), de legyen definiált
+                    elapsed = 0.0
+                label = "power+HR"
 
             if stale:
                 print(f"Adatforrás kiesett ({label}), {elapsed:.1f}s → LEVEL:0")
@@ -2150,7 +2154,8 @@ class FanController:
         print("-" * 60)
         print(f"  Smart Fan Controller v{__version__}  |  Power+HR → BLE Fan")
         print("-" * 60)
-        print(f"FTP: {s['ftp']}W  |  Érvényes tartomány: 0–{s['max_watt']}W")
+        zt = s['zone_thresholds']
+        print(f"FTP: {zt['ftp']}W | Érvényes tartomány: 0–{zt['max_watt']}W")
         
         zt = s['zone_thresholds']
         power_zones = calculate_power_zones(
@@ -2177,7 +2182,7 @@ class FanController:
         print(f"BLE Fan: {s['ble']['device_name']}")
         if s['ble'].get('pin_code'):
             print(f"BLE PIN: {'*' * len(str(s['ble']['pin_code']))}")
-        print(f"Zónamód: {zone_mode if 'zone_mode' in locals() else 'power_only'}")
+        print(f"Zónamód: {zone_mode}")
         print("-" * 60)
         
     async def run(self) -> None:
