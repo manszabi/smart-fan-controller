@@ -1522,17 +1522,13 @@ class BLEPowerInputHandler:
                 try:
                     if len(data) < 4:
                         return
-                    # flags: 2 bájt LE; instantaneous power: 2 bájt LE signed int16
                     power = int.from_bytes(data[2:4], byteorder="little", signed=True)
-                    future = asyncio.run_coroutine_threadsafe(
-                        self.power_queue.put(power), loop
-                    )
-                    future.add_done_callback(
-                        lambda f: logger.debug(f"BLE Power queue put hiba: {f.exception()}")
-                        if not f.cancelled() and f.exception() else None
-                    )
+                    try:
+                        self.power_queue.put_nowait(power)
+                    except asyncio.QueueFull:
+                        logger.debug("BLE Power queue teli, adat elvetve")
                 except Exception as exc:
-                    logger.warning(f"BLE Power notification feldolgozási hiba: {exc}")
+                    logger.warning(f"BLE Power notification hiba: {exc}")
 
             await client.start_notify(self.CYCLING_POWER_MEASUREMENT_UUID, _handler)
             while client.is_connected:
@@ -1923,9 +1919,15 @@ async def hr_processor_task(
         if zone_mode in ("hr_only", "power_only"):
             printer.print("hr_raw", f"❤ HR: {hr} bpm")
 
+        now = time.monotonic()
         avg_hr = hr_averager.add_sample(hr)
+
+        async with state.lock:
+            state.last_hr_time = now   # ← mindig frissítjük, minta érkezett
+
         if avg_hr is None:
-            continue  # Még nincs elég minta
+            continue
+
 
         avg_hr = round(avg_hr)
         new_hr_zone = zone_for_hr(avg_hr, hr_zones)
