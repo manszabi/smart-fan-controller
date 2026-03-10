@@ -76,18 +76,18 @@ logger = logging.getLogger("swift_fan_controller_new")
 # ============================================================
 
 DEFAULT_SETTINGS: Dict[str, Any] = {
-    "ftp": 180,                    # Funkcionális küszöbteljesítmény wattban (100–500)
-    "min_watt": 0,                 # Minimális érvényes teljesítmény (0 vagy több)
-    "max_watt": 1000,              # Maximális érvényes teljesítmény
-    "cooldown_seconds": 120,       # Zóna csökkentés előtti várakozási idő (s), 0–300
-    "buffer_seconds": 3,           # Átlagolási ablak mérete (s), 1–10
-    "minimum_samples": 6,          # ← MÓDOSÍTOTT: volt 8, most 6 (= buffersize // 2)
-    "buffer_rate_hz": 4,           # Várható adatbeérkezési ráta (Hz), 1–60
-    "dropout_timeout": 5,          # Adatnélküli idő (s), ami után Z0-ra vált
-    "zero_power_immediate": False, # True: 0W esetén azonnali leállás cooldown nélkül
+    "ftp": 180,
+    "min_watt": 0,
+    "max_watt": 1000,
+    "cooldown_seconds": 120,
+    "buffer_seconds": 3,        # globális fallback
+    "minimum_samples": 6,       # globális fallback
+    "buffer_rate_hz": 4,        # globális fallback
+    "dropout_timeout": 5,       # globális fallback
+    "zero_power_immediate": False,
     "zone_thresholds": {
-        "z1_max_percent": 60,      # Z1 felső határ: FTP×60%
-        "z2_max_percent": 89,      # Z2 felső határ: FTP×89%
+        "z1_max_percent": 60,
+        "z2_max_percent": 89,
     },
     "ble": {
         "device_name": "FanController",
@@ -100,36 +100,49 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
         "characteristic_uuid": "0000ffe1-0000-1000-8000-00805f9b34fb",
         "pin_code": None,
     },
-    "data_source": {
+    "datasource": {
         "power_source": "antplus",
         "hr_source": "antplus",
+        # --- BLE input buffer beállítások ---
+        "BLE_buffer_seconds": 3,
+        "BLE_minimum_samples": 6,
+        "BLE_buffer_rate_hz": 4,
+        "BLE_dropout_timeout": 5,
+        # --- ANT+ input buffer beállítások ---
+        "ANT_buffer_seconds": 3,
+        "ANT_minimum_samples": 6,
+        "ANT_buffer_rate_hz": 4,
+        "ANT_dropout_timeout": 5,
+        # --- Zwift UDP input buffer beállítások ---
+        "zwiftUDP_buffer_seconds": 10,
+        "zwiftUDP_minimum_samples": 2,
+        "zwiftUDP_buffer_rate_hz": 4,
+        "zwiftUDP_dropout_timeout": 15,
+        # --- BLE power eszköz ---
         "ble_power_device_name": None,
         "ble_power_scan_timeout": 10,
         "ble_power_reconnect_interval": 5,
         "ble_power_max_retries": 10,
+        # --- BLE HR eszköz ---
         "ble_hr_device_name": None,
         "ble_hr_scan_timeout": 10,
         "ble_hr_reconnect_interval": 5,
         "ble_hr_max_retries": 10,
+        # --- Zwift UDP kapcsolat ---
         "zwift_udp_port": 7878,
         "zwift_udp_host": "127.0.0.1",
-        "zwift_udp_buffer_seconds": 10,
-        "zwift_udp_minimum_samples": 2,
-        "zwift_udp_dropout_timeout": 15,
     },
     "heart_rate_zones": {
         "enabled": False,
         "max_hr": 185,
         "resting_hr": 60,
-        # zone_mode: "power_only" | "hr_only" | "higher_wins"
         "zone_mode": "power_only",
         "z1_max_percent": 70,
         "z2_max_percent": 80,
-        "valid_min_hr": 30,    # ← ÚJ: ez alatt fizikailag érvénytelen
-        "valid_max_hr": 220,   # ← ÚJ: ez felett fizikailag érvénytelen
+        "valid_min_hr": 30,
+        "valid_max_hr": 220,
     },
 }
-
 
 # ============================================================
 # BEÁLLÍTÁSOK BETÖLTÉSE
@@ -163,17 +176,16 @@ def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
         print(f"⚠ '{settings_file}' beolvasási hiba: {exc}. Alapértelmezés használata.")
         return settings
 
-        # --- Egyszerű skaláris mezők ---
-        load_int(loaded, settings, "ftp", 100, 500)
-        load_int(loaded, settings, "min_watt", 0, 9999)
-        load_int(loaded, settings, "max_watt", 1, 100000)
-        load_int(loaded, settings, "cooldown_seconds", 0, 300)
-        load_int(loaded, settings, "buffer_seconds", 1, 10)
-        load_int(loaded, settings, "minimum_samples", 1, 1000)
-        load_int(loaded, settings, "buffer_rate_hz", 1, 60)    # ← ÚJ sor!
-        load_int(loaded, settings, "dropout_timeout", 1, 120)
-        load_bool(loaded, settings, "zero_power_immediate")
-
+    # --- Egyszerű skaláris mezők ---
+    _load_int(loaded, settings, "ftp", 100, 500)
+    _load_int(loaded, settings, "min_watt", 0, 9999)
+    _load_int(loaded, settings, "max_watt", 1, 100000)
+    _load_int(loaded, settings, "cooldown_seconds", 0, 300)
+    _load_int(loaded, settings, "buffer_seconds", 1, 10)
+    _load_int(loaded, settings, "minimum_samples", 1, 1000)
+    _load_int(loaded, settings, "buffer_rate_hz", 1, 60)
+    _load_int(loaded, settings, "dropout_timeout", 1, 120)
+    _load_bool(loaded, settings, "zero_power_immediate")
 
     # --- Zóna határok ---
     if isinstance(loaded.get("zone_thresholds"), dict):
@@ -207,26 +219,38 @@ def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
                 print(f"⚠ Érvénytelen 'pin_code' érték: {pc}")
 
     # --- Adatforrás beállítások ---
-    if isinstance(loaded.get("data_source"), dict):
-        ds = loaded["data_source"]
-        if ds.get("power_source") in ("antplus", "ble", "zwift_udp"):
-            settings["data_source"]["power_source"] = ds["power_source"]
-        if ds.get("hr_source") in ("antplus", "ble", "zwift_udp"):
-            settings["data_source"]["hr_source"] = ds["hr_source"]
+    if isinstance(loaded.get("datasource"), dict):
+        ds = loaded["datasource"]
+
+        if ds.get("power_source") in ("antplus", "ble", "zwiftudp"):
+            settings["datasource"]["power_source"] = ds["power_source"]
+        if ds.get("hr_source") in ("antplus", "ble", "zwiftudp"):
+            settings["datasource"]["hr_source"] = ds["hr_source"]
+
         for key in ("ble_power_device_name", "ble_hr_device_name"):
             if key in ds and (ds[key] is None or isinstance(ds[key], str)):
-                settings["data_source"][key] = ds[key]
+                settings["datasource"][key] = ds[key]
+
         for key in ("ble_power_scan_timeout", "ble_power_reconnect_interval",
                     "ble_hr_scan_timeout", "ble_hr_reconnect_interval"):
-            _load_int(ds, settings["data_source"], key, 1, 60)
+            _load_int(ds, settings["datasource"], key, 1, 60)
+
         for key in ("ble_power_max_retries", "ble_hr_max_retries"):
-            _load_int(ds, settings["data_source"], key, 1, 100)
+            _load_int(ds, settings["datasource"], key, 1, 100)
+
         if isinstance(ds.get("zwift_udp_host"), str) and ds["zwift_udp_host"]:
-            settings["data_source"]["zwift_udp_host"] = ds["zwift_udp_host"]
-        _load_int(ds, settings["data_source"], "zwift_udp_port", 1024, 65535)
-        _load_int(ds, settings["data_source"], "zwift_udp_buffer_seconds", 1, 60)
-        _load_int(ds, settings["data_source"], "zwift_udp_minimum_samples", 1, 20)
-        _load_int(ds, settings["data_source"], "zwift_udp_dropout_timeout", 1, 120)
+            settings["datasource"]["zwift_udp_host"] = ds["zwift_udp_host"]
+        _load_int(ds, settings["datasource"], "zwift_udp_port", 1024, 65535)
+
+        # --- Forrás-specifikus buffer beállítások validálása ---
+        for prefix in ("BLE", "ANT", "zwiftUDP"):
+            _load_int(ds, settings["datasource"], f"{prefix}_buffer_seconds",  1, 60)
+            _load_int(ds, settings["datasource"], f"{prefix}_minimum_samples", 1, 100)
+            _load_int(ds, settings["datasource"], f"{prefix}_buffer_rate_hz",  1, 60)
+            _load_int(ds, settings["datasource"], f"{prefix}_dropout_timeout", 1, 300)
+
+        # MEGJEGYZÉS: a régi zwift_udp_buffer_seconds / zwift_udp_minimum_samples /
+        # zwift_udp_dropout_timeout globális override blokk TÖRÖLVE.
 
     # --- Szívfrekvencia zóna beállítások ---
     if isinstance(loaded.get("heart_rate_zones"), dict):
@@ -241,32 +265,28 @@ def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
         _load_int(hrz, settings["heart_rate_zones"], "z1_max_percent", 1, 100)
         _load_int(hrz, settings["heart_rate_zones"], "z2_max_percent", 1, 100)
 
-    # Zwift UDP felülírja a buffer/min_samples/dropout értékeket
-    ds_cfg = settings["data_source"]
-    if ds_cfg["power_source"] == "zwift_udp" or ds_cfg["hr_source"] == "zwift_udp":
-        settings["buffer_seconds"] = ds_cfg["zwift_udp_buffer_seconds"]
-        settings["minimum_samples"] = ds_cfg["zwift_udp_minimum_samples"]
-        settings["dropout_timeout"] = ds_cfg["zwift_udp_dropout_timeout"]
-
-
     # --- Kereszt-validációk a végleges beállításokon ---
-    # 1) minimum_samples <= buffer_seconds * BUFFER_RATE_HZ
+
+    # 1) Forrás-specifikus minimum_samples <= buffer_seconds * buffer_rate_hz ellenőrzés
     try:
-        buffer_seconds = int(settings.get("buffer_seconds", 0))
-        minimum_samples = int(settings.get("minimum_samples", 0))
-        buffer_rate_hz = int(settings.get("buffer_rate_hz", 4))
-        if buffer_seconds > 0 and buffer_rate_hz > 0:
-            max_samples = buffer_seconds * buffer_rate_hz
-            if minimum_samples > max_samples:
-                print(
-                    f"⚠ Érvénytelen minimum_samples ({minimum_samples}) – "
-                    f"nagyobb, mint buffer_seconds * BUFFER_RATE_HZ ({buffer_seconds} * {buffer_rate_hz} = {max_samples}). "
-                    f"minimum_samples {max_samples}-re állítva."
-                )
-                settings["minimum_samples"] = max_samples
+        ds_cfg = settings["datasource"]
+        for prefix in ("BLE", "ANT", "zwiftUDP"):
+            bs  = int(ds_cfg.get(f"{prefix}_buffer_seconds",  settings.get("buffer_seconds",  3)))
+            ms  = int(ds_cfg.get(f"{prefix}_minimum_samples", settings.get("minimum_samples", 6)))
+            brz = int(ds_cfg.get(f"{prefix}_buffer_rate_hz",  settings.get("buffer_rate_hz",  4)))
+            if bs > 0 and brz > 0:
+                max_samples = bs * brz
+                if ms > max_samples:
+                    print(
+                        f"⚠ [{prefix}] Érvénytelen minimum_samples ({ms}) – "
+                        f"nagyobb, mint buffer_seconds * buffer_rate_hz "
+                        f"({bs} * {brz} = {max_samples}). "
+                        f"{prefix}_minimum_samples {max_samples}-re állítva."
+                    )
+                    ds_cfg[f"{prefix}_minimum_samples"] = max_samples
     except Exception as exc:
-        # Ha bármi váratlan hiba történik, nem dobunk kivételt konfiguráció betöltéskor.
         print(f"⚠ minimum_samples/buffer_seconds kereszt-validáció sikertelen: {exc}")
+
     # 2) Power zóna: min_watt < max_watt
     try:
         zt = settings.get("zone_thresholds") or {}
@@ -287,6 +307,7 @@ def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
                 zt["max_watt"] = min_watt + 1
     except Exception as exc:
         print(f"⚠ Watt zóna kereszt-validáció sikertelen: {exc}")
+
     # 3) HR zónák: z1_max_percent < z2_max_percent és resting_hr < max_hr
     try:
         hrz = settings.get("heart_rate_zones") or {}
@@ -298,14 +319,13 @@ def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
                     f"⚠ Érvénytelen HR zóna százalékok (z1_max_percent={z1p}, z2_max_percent={z2p}). "
                     f"Értékek rendezése és legalább 1% különbség biztosítása."
                 )
-                low = min(z1p, z2p)
+                low  = min(z1p, z2p)
                 high = max(z1p, z2p)
-                # biztosítsuk, hogy low < high
                 if low == high:
                     high = min(100, low + 1)
                 hrz["z1_max_percent"] = low
                 hrz["z2_max_percent"] = high
-        max_hr = hrz.get("max_hr")
+        max_hr     = hrz.get("max_hr")
         resting_hr = hrz.get("resting_hr")
         if isinstance(max_hr, int) and isinstance(resting_hr, int):
             if resting_hr >= max_hr:
@@ -349,10 +369,46 @@ def _save_default_settings(path: str, settings: Dict[str, Any]) -> None:
     except OSError as exc:
         print(f"✗ Nem sikerült létrehozni a '{path}' fájlt: {exc}")
 
-
 # ============================================================
 # TISZTA FÜGGVÉNYEK – ZÓNA SZÁMÍTÁS
 # ============================================================
+
+def _resolve_buffer_settings(
+    settings: Dict[str, Any], role: str
+) -> Dict[str, Any]:
+    """
+    Visszaadja a megfelelő buffer/dropout paramétereket a megadott szerephez.
+    A role ("power" vagy "hr") alapján meghatározza az aktív forrást,
+    majd visszaadja a forrás-specifikus datasource buffer beállításokat.
+    Fallback: globális buffer_seconds / minimum_samples / buffer_rate_hz / dropout_timeout.
+
+    Args:
+        settings: Betöltött beállítások dict-je.
+        role:     "power" vagy "hr".
+    Returns:
+        Dict: buffer_seconds, minimum_samples, buffer_rate_hz, dropout_timeout
+    """
+    ds = settings["datasource"]
+    source_key = "power_source" if role == "power" else "hr_source"
+    source = ds.get(source_key, "antplus")
+
+    if source == "ble":
+        prefix = "BLE"
+    elif source == "antplus":
+        prefix = "ANT"
+    else:  # zwiftudp
+        prefix = "zwiftUDP"
+
+    return {
+        "buffer_seconds":  ds.get(f"{prefix}_buffer_seconds",
+                            settings.get("buffer_seconds",  3)),
+        "minimum_samples": ds.get(f"{prefix}_minimum_samples",
+                            settings.get("minimum_samples", 6)),
+        "buffer_rate_hz":  ds.get(f"{prefix}_buffer_rate_hz",
+                            settings.get("buffer_rate_hz",  4)),
+        "dropout_timeout": ds.get(f"{prefix}_dropout_timeout",
+                            settings.get("dropout_timeout", 5)),
+    }
 
 def calculate_power_zones(
     ftp: int,
@@ -1977,26 +2033,17 @@ async def zone_controller_task(
 
 async def dropout_checker_task(
     state: ControllerState,
-    zone_queue: asyncio.Queue,
+    zonequeue: asyncio.Queue,
     settings: Dict[str, Any],
-    power_averager: PowerAverager,   # ← új
-    hr_averager: HRAverager,         # ← új
+    poweraverager: PowerAverager,
+    hraverager: HRAverager,
+    power_dropout_timeout: float,
+    hr_dropout_timeout: float,
+    zone_mode: str,  # ← PARAMÉTERKÉNT KAPJA, NEM SZÁMOLJA ÚJRA
 ) -> None:
-    """Adatforrás kiesés detektálása, Z0 küldése és pufferek ürítése.
-
-    Dropout esetén:
-    - Z0-t küld a ventilátor felé
-    - Törli az érintett PowerAverager / HRAverager puffereket
-    - Reseteli a kapcsolódó state mezőket (avg_power, avg_hr, power_zone, hr_zone)
-
-    Így dropout után az első új átlag csak friss mintákból épül fel.
     """
-    dropout_timeout = settings["dropout_timeout"]
-    hr_enabled = settings.get("heart_rate_zones", {}).get("enabled", False)
-    zone_mode = (
-        settings["heart_rate_zones"].get("zone_mode", "power_only")
-        if hr_enabled else "power_only"
-    )
+    Adatforrás kiesés detektálása, Z0 küldése és pufferek ürítése.
+    """
     logger.info("Dropout checker korrutin elindítva")
 
     while True:
@@ -2008,53 +2055,43 @@ async def dropout_checker_task(
             if state.current_zone is None or state.current_zone == 0:
                 continue
 
-            power_fresh = (now - state.last_power_time) < dropout_timeout
-            hr_fresh = (
-                state.last_hr_time is not None
-                and (now - state.last_hr_time) < dropout_timeout
-            )
+            power_fresh = (now - state.last_power_time) < power_dropout_timeout
+            hr_fresh    = (state.last_hr_time is not None and
+                        (now - state.last_hr_time) < hr_dropout_timeout)
 
+            # ← PARAMÉTERBŐL HASZNÁLJA (NINCS ÚJRA SZÁMOLÁS)
             if zone_mode == "power_only":
-                stale = not power_fresh
+                stale   = not power_fresh
                 elapsed = now - state.last_power_time
-                label = "power"
+                label   = "power"
             elif zone_mode == "hr_only":
-                stale = not hr_fresh
-                elapsed = (
-                    (now - state.last_hr_time)
-                    if state.last_hr_time is not None
-                    else float("inf")
-                )
-                label = "HR"
+                elapsed = (now - state.last_hr_time
+                        if state.last_hr_time is not None else float("inf"))
+                stale   = not hr_fresh
+                label   = "HR"
             else:  # higher_wins
-                stale = not power_fresh and not hr_fresh
+                stale   = not power_fresh and not hr_fresh
                 elapsed = min(
                     now - state.last_power_time,
-                    (now - state.last_hr_time)
-                    if state.last_hr_time is not None
-                    else float("inf"),
+                    now - state.last_hr_time if state.last_hr_time is not None else float("inf"),
                 )
-                label = "power+HR"
+                label   = "power+HR"
 
             if stale:
-                print(f"⚠ Adatforrás kiesett ({label}, {elapsed:.1f}s) → LEVEL:0")
-
-                # Pufferek ürítése – régi minták ne keveredjenek az újba
+                print(f"Adatforrás kiesett ({label}), {elapsed:.1f}s → LEVEL:0")
                 if zone_mode in ("power_only", "higher_wins"):
-                    power_averager.clear()
-                    state.current_avg_power = None
+                    poweraverager.clear()
+                    state.current_avg_power  = None
                     state.current_power_zone = None
-
                 if zone_mode in ("hr_only", "higher_wins"):
-                    hr_averager.clear()
-                    state.current_avg_hr = None
+                    hraverager.clear()
+                    state.current_avg_hr  = None
                     state.current_hr_zone = None
-
                 state.current_zone = 0
                 send_dropout = True
 
         if send_dropout:
-            await send_zone(0, zone_queue)
+            await send_zone(0, zonequeue)
 
 # ============================================================
 # FAN CONTROLLER – FŐ ÖSSZEHANGOLÁS
@@ -2130,7 +2167,11 @@ class FanController:
         s = self.settings
         ds = s["data_source"]
         hr_enabled = s.get("heart_rate_zones", {}).get("enabled", False)
-        zone_mode = s["heart_rate_zones"].get("zone_mode", "power_only") if hr_enabled else "power_only"
+        if hr_enabled:
+            zone_mode = s["heart_rate_zones"].get("zone_mode", "power_only")
+        else:
+            zone_mode = "power_only"
+
 
         # --- Zóna határok kiszámítása ---
         power_zones = calculate_power_zones(
@@ -2152,9 +2193,22 @@ class FanController:
         zone_event = asyncio.Event()
 
         state = ControllerState()
-        buffer_rate_hz = s.get("buffer_rate_hz", 4)  # ← ÚJ
-        power_averager = PowerAverager(s["buffer_seconds"], s["minimum_samples"], buffer_rate_hz)  # ← MÓDOSÍTOTT
-        hr_averager = HRAverager(s["buffer_seconds"], s["minimum_samples"], buffer_rate_hz)        # ← MÓDOSÍTOTT
+        power_buf = _resolve_buffer_settings(s, "power")
+        hr_buf    = _resolve_buffer_settings(s, "hr")
+
+        power_averager = PowerAverager(
+            power_buf["buffer_seconds"],
+            power_buf["minimum_samples"],
+            power_buf["buffer_rate_hz"],
+        )
+        hr_averager = HRAverager(
+            hr_buf["buffer_seconds"],
+            hr_buf["minimum_samples"],
+            hr_buf["buffer_rate_hz"],
+        )
+        cooldown_ctrl = CooldownController(s["cooldown_seconds"])
+        printer      = ConsolePrinter()
+        loop         = asyncio.get_event_loop()
         cooldown_ctrl = CooldownController(s["cooldown_seconds"])
         printer = ConsolePrinter()
 
@@ -2199,6 +2253,8 @@ class FanController:
             else:
                 logger.warning("ANT+ forrás kérve, de az openant könyvtár nem elérhető!")
 
+                # --- power_buf és hr_buf már korábban létrejöttek (4. lépés) ---
+
         # --- Feldolgozó és vezérlő korrutinok ---
         self._tasks.append(asyncio.create_task(
             power_processor_task(
@@ -2218,7 +2274,13 @@ class FanController:
             ), name="ZoneController"
         ))
         self._tasks.append(asyncio.create_task(
-            dropout_checker_task(state, zone_cmd_queue, s, power_averager, hr_averager),
+            dropout_checker_task(
+                state, zone_cmd_queue, s,
+                power_averager, hr_averager,
+                power_buf["dropout_timeout"],
+                hr_buf["dropout_timeout"],
+                zone_mode,
+            ),
             name="DropoutChecker"
         ))
 
