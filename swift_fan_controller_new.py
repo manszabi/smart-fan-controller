@@ -2274,7 +2274,7 @@ class FanController:
             try:
                 monitor_script = os.path.join(
                     os.path.dirname(os.path.abspath(__file__)),
-                    "zwift_udp_monitor.py"
+                    "zwift_api_polling.py"
                 )
 
                 # Windows: STARTUPINFO-val teljesen leválasztjuk a handle-öket
@@ -2290,20 +2290,20 @@ class FanController:
                     startupinfo=startupinfo,
                     close_fds=True,             # minden egyéb fd lezárva a gyerekben
                 )
-                msg = f"zwift_udp_monitor.py elindítva (PID: {self._zwift_proc.pid})"
+                msg = f"zwift_api_polling.py elindítva (PID: {self._zwift_proc.pid})"
                 logger.info(msg)
                 print(f"[INFO] {msg}")
 
             except FileNotFoundError as exc:
-                msg = f"[HIBA] zwift_udp_monitor.py nem található: {exc}"
+                msg = f"[HIBA] zwift_api_polling.py nem található: {exc}"
                 print(msg)
                 logger.error(msg)
             except OSError as exc:
-                msg = f"[HIBA] zwift_udp_monitor.py indítása sikertelen: {exc}"
+                msg = f"[HIBA] zwift_api_polling.py indítása sikertelen: {exc}"
                 print(msg)
                 logger.error(msg)
             except Exception as exc:
-                msg = f"[HIBA] Váratlan hiba zwift_udp_monitor.py indításakor: {exc}"
+                msg = f"[HIBA] Váratlan hiba zwift_api_polling.py indításakor: {exc}"
                 print(msg)
                 logger.error(msg)
 
