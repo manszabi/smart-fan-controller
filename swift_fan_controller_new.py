@@ -37,6 +37,9 @@ import signal
 import threading
 import time
 import atexit
+import subprocess
+import sys
+import os
 from collections import deque
 from typing import Any, Dict, Optional, Tuple
 
@@ -2143,6 +2146,7 @@ class FanController:
         self._antplus_thread: Optional[threading.Thread] = None
         self._tasks: list = []
         self._running = True
+        self._zwift_proc: Optional[subprocess.Popen] = None
 
     def print_startup_info(self) -> None:
         """Kiírja az indítási konfigurációs összefoglalót."""
@@ -2262,12 +2266,45 @@ class FanController:
                 ble_hr.run(), name="BLEHRInput"
             ))
 
+        #needs_zwift = (power_source == "zwiftudp") or (hr_source == "zwiftudp" and hr_enabled)
+        #if needs_zwift:
+        #    zwiftudp = ZwiftUDPInputHandler(s, raw_power_queue, raw_hr_queue)
+        #    self._tasks.append(asyncio.create_task(
+        #        zwiftudp.run(), name="ZwiftUDPInput"
+        #    ))
+
         needs_zwift = (power_source == "zwiftudp") or (hr_source == "zwiftudp" and hr_enabled)
         if needs_zwift:
+            # --- zwift_udp_monitor.py indítása külön ablakban ---
+            try:
+                monitor_script = os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)),
+                    "zwift_udp_monitor.py"
+                )
+                self._zwift_proc = subprocess.Popen(
+                    [sys.executable, monitor_script],
+                    creationflags=subprocess.CREATE_NEW_CONSOLE,  # külön ablak Windows 11-en
+                )
+                logger.info(f"zwift_udp_monitor.py elindítva (PID: {self._zwift_proc.pid})")
+                print(f"[INFO] zwift_udp_monitor.py elindítva (PID: {self._zwift_proc.pid})")
+            except FileNotFoundError as exc:
+                msg = f"[HIBA] zwift_udp_monitor.py nem található: {exc}"
+                print(msg)
+                logger.error(msg)
+            except OSError as exc:
+                msg = f"[HIBA] zwift_udp_monitor.py indítása sikertelen: {exc}"
+                print(msg)
+                logger.error(msg)
+            except Exception as exc:
+                msg = f"[HIBA] Váratlan hiba zwift_udp_monitor.py indításakor: {exc}"
+                print(msg)
+                logger.error(msg)
+
             zwiftudp = ZwiftUDPInputHandler(s, raw_power_queue, raw_hr_queue)
             self._tasks.append(asyncio.create_task(
                 zwiftudp.run(), name="ZwiftUDPInput"
             ))
+
 
         needs_antplus = (power_source == "antplus") or (hr_source == "antplus" and hr_enabled)
         if needs_antplus:
@@ -2338,7 +2375,18 @@ class FanController:
             if self._antplus_thread.is_alive():
                 logger.warning("ANT+ szál nem állt le 5s alatt!")
 
-
+        # --- zwift_udp_monitor.py leállítása ---  ← ÚJ RÉSZ
+        if self._zwift_proc is not None and self._zwift_proc.poll() is None:
+            logger.info(f"zwift_udp_monitor.py leállítása (PID: {self._zwift_proc.pid})...")
+            print(f"[INFO] zwift_udp_monitor.py leállítása (PID: {self._zwift_proc.pid})...")
+            try:
+                self._zwift_proc.terminate()
+                self._zwift_proc.wait(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                logger.warning("zwift_udp_monitor.py nem állt le 5s alatt, kill...")
+                self._zwift_proc.kill()
+            except Exception as exc:
+                logger.error(f"zwift_udp_monitor.py leállítása sikertelen: {exc}")
 
 # ============================================================
 # MAIN
