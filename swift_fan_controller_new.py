@@ -183,9 +183,6 @@ def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
         return settings
 
     # --- Egyszerű skaláris mezők ---
-    #_load_int(loaded, settings, "ftp", 100, 500)
-    #_load_int(loaded, settings, "min_watt", 0, 9999)
-    #_load_int(loaded, settings, "max_watt", 1, 100000)
     _load_int(loaded, settings, "cooldown_seconds", 0, 300)
     _load_int(loaded, settings, "buffer_seconds", 1, 10)
     _load_int(loaded, settings, "minimum_samples", 1, 1000)
@@ -269,7 +266,7 @@ def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
         _load_int(hrz, settings["heart_rate_zones"], "resting_hr", 30, 100)
         if hrz.get("zone_mode") in ("power_only", "hr_only", "higher_wins"):
             settings["heart_rate_zones"]["zone_mode"] = hrz["zone_mode"]
-        _load_int(hrz, settings["heart_rate_zones"], "valid_min_hr", 1, 60)
+        _load_int(hrz, settings["heart_rate_zones"], "valid_min_hr", 30, 100)
         _load_int(hrz, settings["heart_rate_zones"], "valid_max_hr", 150, 300)
         _load_int(hrz, settings["heart_rate_zones"], "z1_max_percent", 1, 100)
         _load_int(hrz, settings["heart_rate_zones"], "z2_max_percent", 1, 100)
@@ -1986,7 +1983,6 @@ async def zone_controller_task(
         if hr_enabled else "power_only"
     )
     zero_immediate = settings.get("zero_power_immediate", False)
-    #dropout_timeout = settings["dropout_timeout"]
     power_buf = _resolve_buffer_settings(settings, "power")
     hr_buf    = _resolve_buffer_settings(settings, "hr")
     power_dropout_timeout = power_buf["dropout_timeout"]
