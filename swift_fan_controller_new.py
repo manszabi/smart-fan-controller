@@ -2285,8 +2285,7 @@ class FanController:
                 self._zwift_proc = subprocess.Popen(
                     [sys.executable, monitor_script],
                     stdin=subprocess.DEVNULL,   # stdin leválasztva
-                    stdout=subprocess.DEVNULL,  # stdout NEM örökölt — a zwift_udp_monitor
-                    stderr=subprocess.DEVNULL,  # stderr NEM örökölt   maga kezeli a logolást
+                    
                     creationflags=subprocess.CREATE_NEW_CONSOLE,
                     startupinfo=startupinfo,
                     close_fds=True,             # minden egyéb fd lezárva a gyerekben
