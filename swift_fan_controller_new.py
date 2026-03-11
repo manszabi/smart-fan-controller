@@ -2271,28 +2271,28 @@ class FanController:
 
         needs_zwift = (power_source == "zwiftudp") or (hr_source == "zwiftudp" and hr_enabled)
         if needs_zwift:
-            # --- zwift_udp_monitor.py indítása külön ablakban ---
+            # --- zwift_api_polling.py indítása külön ablakban ---
             try:
                 monitor_script = os.path.join(
                     os.path.dirname(os.path.abspath(__file__)),
-                    "zwift_udp_monitor.py"
+                    "zwift_api_polling.py"
                 )
                 self._zwift_proc = subprocess.Popen(
                     [sys.executable, monitor_script],
                     creationflags=subprocess.CREATE_NEW_CONSOLE,  # külön ablak Windows 11-en
                 )
-                logger.info(f"zwift_udp_monitor.py elindítva (PID: {self._zwift_proc.pid})")
-                print(f"[INFO] zwift_udp_monitor.py elindítva (PID: {self._zwift_proc.pid})")
+                logger.info(f"zwift_api_polling.py elindítva (PID: {self._zwift_proc.pid})")
+                print(f"[INFO] zwift_api_polling.py elindítva (PID: {self._zwift_proc.pid})")
             except FileNotFoundError as exc:
-                msg = f"[HIBA] zwift_udp_monitor.py nem található: {exc}"
+                msg = f"[HIBA] zwift_api_polling.py nem található: {exc}"
                 print(msg)
                 logger.error(msg)
             except OSError as exc:
-                msg = f"[HIBA] zwift_udp_monitor.py indítása sikertelen: {exc}"
+                msg = f"[HIBA] zwift_api_polling.py indítása sikertelen: {exc}"
                 print(msg)
                 logger.error(msg)
             except Exception as exc:
-                msg = f"[HIBA] Váratlan hiba zwift_udp_monitor.py indításakor: {exc}"
+                msg = f"[HIBA] Váratlan hiba zwift_api_polling.py indításakor: {exc}"
                 print(msg)
                 logger.error(msg)
 
@@ -2371,18 +2371,18 @@ class FanController:
             if self._antplus_thread.is_alive():
                 logger.warning("ANT+ szál nem állt le 5s alatt!")
 
-        # --- zwift_udp_monitor.py leállítása ---  ← ÚJ RÉSZ
+        # --- zwift_api_polling.py leállítása ---  ← ÚJ RÉSZ
         if self._zwift_proc is not None and self._zwift_proc.poll() is None:
-            logger.info(f"zwift_udp_monitor.py leállítása (PID: {self._zwift_proc.pid})...")
-            print(f"[INFO] zwift_udp_monitor.py leállítása (PID: {self._zwift_proc.pid})...")
+            logger.info(f"zwift_api_polling.py leállítása (PID: {self._zwift_proc.pid})...")
+            print(f"[INFO] zwift_api_polling.py leállítása (PID: {self._zwift_proc.pid})...")
             try:
                 self._zwift_proc.terminate()
                 self._zwift_proc.wait(timeout=5.0)
             except subprocess.TimeoutExpired:
-                logger.warning("zwift_udp_monitor.py nem állt le 5s alatt, kill...")
+                logger.warning("zwift_api_polling.py nem állt le 5s alatt, kill...")
                 self._zwift_proc.kill()
             except Exception as exc:
-                logger.error(f"zwift_udp_monitor.py leállítása sikertelen: {exc}")
+                logger.error(f"zwift_api_polling.py leállítása sikertelen: {exc}")
 
 # ============================================================
 # MAIN
