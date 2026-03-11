@@ -2271,7 +2271,6 @@ class FanController:
 
         needs_zwift = (power_source == "zwiftudp") or (hr_source == "zwiftudp" and hr_enabled)
         if needs_zwift:
-            # --- zwift_api_polling.py indítása külön ablakban ---
             try:
                 monitor_script = os.path.join(
                     os.path.dirname(os.path.abspath(__file__)),
@@ -2279,10 +2278,11 @@ class FanController:
                 )
                 self._zwift_proc = subprocess.Popen(
                     [sys.executable, monitor_script],
-                    creationflags=subprocess.CREATE_NEW_CONSOLE,  # külön ablak Windows 11-en
+                    creationflags=subprocess.CREATE_NEW_CONSOLE,
                 )
-                logger.info(f"zwift_api_polling.py elindítva (PID: {self._zwift_proc.pid})")
-                print(f"[INFO] zwift_api_polling.py elindítva (PID: {self._zwift_proc.pid})")
+                msg = f"zwift_api_polling.py elindítva (PID: {self._zwift_proc.pid})"
+                logger.info(msg)
+                print(f"[INFO] {msg}")
             except FileNotFoundError as exc:
                 msg = f"[HIBA] zwift_api_polling.py nem található: {exc}"
                 print(msg)
