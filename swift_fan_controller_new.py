@@ -79,9 +79,6 @@ logger = logging.getLogger("swift_fan_controller_new")
 # ============================================================
 
 DEFAULT_SETTINGS: Dict[str, Any] = {
-    #"ftp": 180,
-    #"min_watt": 0,
-    #"max_watt": 1000,
     "cooldown_seconds": 120,
     "buffer_seconds": 3,        # globális fallback
     "minimum_samples": 6,       # globális fallback
@@ -2262,34 +2259,27 @@ class FanController:
                 ble_hr.run(), name="BLEHRInput"
             ))
 
-        #needs_zwift = (power_source == "zwiftudp") or (hr_source == "zwiftudp" and hr_enabled)
-        #if needs_zwift:
-        #    zwiftudp = ZwiftUDPInputHandler(s, raw_power_queue, raw_hr_queue)
-        #    self._tasks.append(asyncio.create_task(
-        #        zwiftudp.run(), name="ZwiftUDPInput"
-        #    ))
-
         needs_zwift = (power_source == "zwiftudp") or (hr_source == "zwiftudp" and hr_enabled)
         if needs_zwift:
+            # 1. Subprocess indítása (opcionális — külön is indítható)
             try:
                 monitor_script = os.path.join(
                     os.path.dirname(os.path.abspath(__file__)),
                     "zwift_api_polling.py"
                 )
 
-                # Windows: STARTUPINFO-val teljesen leválasztjuk a handle-öket
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                startupinfo.wShowWindow = 1  # SW_SHOWNORMAL — látható ablak
+                startupinfo.wShowWindow = 4  # SW_SHOWNOACTIVATE — megjelenik, de nem veszi át a fókuszt
 
                 self._zwift_proc = subprocess.Popen(
                     [sys.executable, monitor_script],
-                    stdin=subprocess.DEVNULL,   # stdin leválasztva
-                    
+                    stdin=subprocess.DEVNULL,
                     creationflags=subprocess.CREATE_NEW_CONSOLE,
                     startupinfo=startupinfo,
-                    close_fds=True,             # minden egyéb fd lezárva a gyerekben
+                    close_fds=True,
                 )
+
                 msg = f"zwift_api_polling.py elindítva (PID: {self._zwift_proc.pid})"
                 logger.info(msg)
                 print(f"[INFO] {msg}")
@@ -2307,12 +2297,11 @@ class FanController:
                 print(msg)
                 logger.error(msg)
 
-
+            # 2. UDP handler mindig létrejön, függetlenül a subprocess sikerétől
             zwiftudp = ZwiftUDPInputHandler(s, raw_power_queue, raw_hr_queue)
             self._tasks.append(asyncio.create_task(
                 zwiftudp.run(), name="ZwiftUDPInput"
             ))
-
 
         needs_antplus = (power_source == "antplus") or (hr_source == "antplus" and hr_enabled)
         if needs_antplus:
@@ -2383,18 +2372,22 @@ class FanController:
             if self._antplus_thread.is_alive():
                 logger.warning("ANT+ szál nem állt le 5s alatt!")
 
-        # --- zwift_api_polling.py leállítása ---  ← ÚJ RÉSZ
-        if self._zwift_proc is not None and self._zwift_proc.poll() is None:
-            logger.info(f"zwift_api_polling.py leállítása (PID: {self._zwift_proc.pid})...")
-            print(f"[INFO] zwift_api_polling.py leállítása (PID: {self._zwift_proc.pid})...")
-            try:
-                self._zwift_proc.terminate()
-                self._zwift_proc.wait(timeout=5.0)
-            except subprocess.TimeoutExpired:
-                logger.warning("zwift_api_polling.py nem állt le 5s alatt, kill...")
-                self._zwift_proc.kill()
-            except Exception as exc:
-                logger.error(f"zwift_api_polling.py leállítása sikertelen: {exc}")
+        # Zwift subprocess leállítása
+        if hasattr(self, "_zwift_proc") and self._zwift_proc is not None:
+            if self._zwift_proc.poll() is None:  # csak ha még fut
+                logger.info(f"zwift_api_polling.py leállítása (PID: {self._zwift_proc.pid})...")
+                print(f"[INFO] zwift_api_polling.py leállítása (PID: {self._zwift_proc.pid})...")
+                try:
+                    self._zwift_proc.terminate()
+                    self._zwift_proc.wait(timeout=5.0)
+                    logger.info("zwift_api_polling.py leállítva")
+                except subprocess.TimeoutExpired:
+                    logger.warning("zwift_api_polling.py nem állt le 5s alatt, kill...")
+                    self._zwift_proc.kill()
+                except OSError as exc:
+                    logger.error(f"zwift_api_polling.py leállítása sikertelen: {exc}")
+                finally:
+                    self._zwift_proc = None
 
 # ============================================================
 # MAIN
