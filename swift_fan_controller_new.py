@@ -80,10 +80,10 @@ logger = logging.getLogger("swift_fan_controller_new")
 
 DEFAULT_SETTINGS: Dict[str, Any] = {
     "cooldown_seconds": 120,
-    "buffer_seconds": 3,        # globális fallback
-    "minimum_samples": 6,       # globális fallback
-    "buffer_rate_hz": 4,        # globális fallback
-    "dropout_timeout": 5,       # globális fallback
+    "buffer_seconds": 3,
+    "minimum_samples": 6,
+    "buffer_rate_hz": 4,
+    "dropout_timeout": 5,
     "zero_power_immediate": False,
     "zone_thresholds": {
         "ftp": 180,
@@ -106,32 +106,26 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "datasource": {
         "power_source": "antplus",
         "hr_source": "antplus",
-        # --- BLE input buffer beállítások ---
         "BLE_buffer_seconds": 3,
         "BLE_minimum_samples": 6,
         "BLE_buffer_rate_hz": 4,
         "BLE_dropout_timeout": 5,
-        # --- ANT+ input buffer beállítások ---
         "ANT_buffer_seconds": 3,
         "ANT_minimum_samples": 6,
         "ANT_buffer_rate_hz": 4,
         "ANT_dropout_timeout": 5,
-        # --- Zwift UDP input buffer beállítások ---
         "zwiftUDP_buffer_seconds": 10,
         "zwiftUDP_minimum_samples": 2,
         "zwiftUDP_buffer_rate_hz": 4,
         "zwiftUDP_dropout_timeout": 15,
-        # --- BLE power eszköz ---
         "ble_power_device_name": None,
         "ble_power_scan_timeout": 10,
         "ble_power_reconnect_interval": 5,
         "ble_power_max_retries": 10,
-        # --- BLE HR eszköz ---
         "ble_hr_device_name": None,
         "ble_hr_scan_timeout": 10,
         "ble_hr_reconnect_interval": 5,
         "ble_hr_max_retries": 10,
-        # --- Zwift UDP kapcsolat ---
         "zwift_udp_port": 7878,
         "zwift_udp_host": "127.0.0.1",
     },
@@ -147,9 +141,11 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     },
 }
 
+
 # ============================================================
 # BEÁLLÍTÁSOK BETÖLTÉSE
 # ============================================================
+
 
 def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
     """Betölti és validálja a JSON beállítási fájlt.
@@ -245,15 +241,11 @@ def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
             settings["datasource"]["zwift_udp_host"] = ds["zwift_udp_host"]
         _load_int(ds, settings["datasource"], "zwift_udp_port", 1024, 65535)
 
-        # --- Forrás-specifikus buffer beállítások validálása ---
         for prefix in ("BLE", "ANT", "zwiftUDP"):
             _load_int(ds, settings["datasource"], f"{prefix}_buffer_seconds",  1, 60)
             _load_int(ds, settings["datasource"], f"{prefix}_minimum_samples", 1, 100)
             _load_int(ds, settings["datasource"], f"{prefix}_buffer_rate_hz",  1, 60)
             _load_int(ds, settings["datasource"], f"{prefix}_dropout_timeout", 1, 300)
-
-        # MEGJEGYZÉS: a régi zwift_udp_buffer_seconds / zwift_udp_minimum_samples /
-        # zwift_udp_dropout_timeout globális override blokk TÖRÖLVE.
 
     # --- Szívfrekvencia zóna beállítások ---
     if isinstance(loaded.get("heart_rate_zones"), dict):
@@ -268,9 +260,9 @@ def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
         _load_int(hrz, settings["heart_rate_zones"], "z1_max_percent", 1, 100)
         _load_int(hrz, settings["heart_rate_zones"], "z2_max_percent", 1, 100)
 
-    # --- Kereszt-validációk a végleges beállításokon ---
+    # --- Kereszt-validációk ---
 
-    # 1) Forrás-specifikus minimum_samples <= buffer_seconds * buffer_rate_hz ellenőrzés
+    # 1) Forrás-specifikus minimum_samples <= buffer_seconds * buffer_rate_hz
     try:
         ds_cfg = settings["datasource"]
         for prefix in ("BLE", "ANT", "zwiftUDP"):
@@ -311,21 +303,39 @@ def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
     except Exception as exc:
         print(f"⚠ Watt zóna kereszt-validáció sikertelen: {exc}")
 
-    # 3) HR zónák: z1_max_percent < z2_max_percent és resting_hr < max_hr
+    # 3) Power zóna százalékok: z1_max_percent < z2_max_percent
+    try:
+        zt = settings.get("zone_thresholds") or {}
+        z1p = zt.get("z1_max_percent")
+        z2p = zt.get("z2_max_percent")
+        if isinstance(z1p, int) and isinstance(z2p, int) and z1p >= z2p:
+            low, high = min(z1p, z2p), max(z1p, z2p)
+            if low == high:
+                high = min(100, low + 1)
+            print(
+                f"⚠ Érvénytelen power zóna százalékok (z1={z1p}, z2={z2p}). "
+                f"Javítva: z1={low}, z2={high}."
+            )
+            zt["z1_max_percent"] = low
+            zt["z2_max_percent"] = high
+    except Exception as exc:
+        print(f"⚠ Power zóna százalék kereszt-validáció sikertelen: {exc}")
+
+    # 4) HR zónák: z1_max_percent < z2_max_percent és resting_hr < max_hr
     try:
         hrz = settings.get("heart_rate_zones") or {}
         z1p = hrz.get("z1_max_percent")
         z2p = hrz.get("z2_max_percent")
         if isinstance(z1p, int) and isinstance(z2p, int):
             if z1p >= z2p:
-                print(
-                    f"⚠ Érvénytelen HR zóna százalékok (z1_max_percent={z1p}, z2_max_percent={z2p}). "
-                    f"Értékek rendezése és legalább 1% különbség biztosítása."
-                )
                 low  = min(z1p, z2p)
                 high = max(z1p, z2p)
                 if low == high:
                     high = min(100, low + 1)
+                print(
+                    f"⚠ Érvénytelen HR zóna százalékok (z1_max_percent={z1p}, z2_max_percent={z2p}). "
+                    f"Értékek rendezése és legalább 1% különbség biztosítása."
+                )
                 hrz["z1_max_percent"] = low
                 hrz["z2_max_percent"] = high
         max_hr     = hrz.get("max_hr")
@@ -335,11 +345,27 @@ def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
                 new_rest = max(30, max_hr - 1)
                 print(
                     f"⚠ Érvénytelen HR értékek (resting_hr={resting_hr}, max_hr={max_hr}). "
-                    f"resting_hr {new_rest}-re állítva, hogy resting_hr < max_hr legyen."
+                    f"resting_hr {new_rest}-re állítva."
                 )
                 hrz["resting_hr"] = new_rest
     except Exception as exc:
         print(f"⚠ HR zóna kereszt-validáció sikertelen: {exc}")
+
+    # 5) valid_min_hr < valid_max_hr
+    try:
+        hrz = settings.get("heart_rate_zones") or {}
+        valid_min = hrz.get("valid_min_hr")
+        valid_max = hrz.get("valid_max_hr")
+        if isinstance(valid_min, int) and isinstance(valid_max, int):
+            if valid_min >= valid_max:
+                print(
+                    f"⚠ valid_min_hr ({valid_min}) >= valid_max_hr ({valid_max}), "
+                    f"alapértelmezés visszaállítva."
+                )
+                hrz["valid_min_hr"] = DEFAULT_SETTINGS["heart_rate_zones"]["valid_min_hr"]
+                hrz["valid_max_hr"] = DEFAULT_SETTINGS["heart_rate_zones"]["valid_max_hr"]
+    except Exception as exc:
+        print(f"⚠ valid_hr kereszt-validáció sikertelen: {exc}")
 
     return settings
 
@@ -348,7 +374,12 @@ def _load_int(src: dict, dst: dict, key: str, lo: int, hi: int) -> None:
     """Helper: int/float mezőt tölt be érvényes tartomány esetén."""
     if key in src:
         v = src[key]
-        if isinstance(v, (int, float)) and not isinstance(v, bool) and lo <= v <= hi:
+        if isinstance(v, bool):
+            print(f"⚠ Érvénytelen '{key}' érték: {v} ({lo}–{hi} közötti egész kell)")
+            return
+        if isinstance(v, float) and not v.is_integer():
+            print(f"⚠ '{key}' törtrész elvész: {v} → {int(v)}")
+        if isinstance(v, (int, float)) and lo <= v <= hi:
             dst[key] = int(v)
         else:
             print(f"⚠ Érvénytelen '{key}' érték: {v} ({lo}–{hi} közötti egész kell)")
