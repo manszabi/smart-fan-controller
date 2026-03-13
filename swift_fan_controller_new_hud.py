@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """
 swift_fan_controller_new.py
 
@@ -39,9 +40,12 @@ import time
 import atexit
 import subprocess
 import sys
-import os
+import os 
+
 from collections import deque
 from typing import Any, Dict, Optional, Tuple
+from typing import Optional
+from tkinter import ttk 
 
 Node: Any = None
 ANTPLUS_NETWORK_KEY: Any = None
@@ -54,6 +58,8 @@ BleakClient: Any = None
 BleakScanner: Any = None
 
 # --- Külső könyvtárak (opcionális importok – a program importálható marad teszteléshez) ---
+_ANTPLUS_AVAILABLE: bool = False  # kis-nagybetűs prefix, vagy típusannotáció
+_BLEAK_AVAILABLE: bool = False
 try:
     from openant.easy.node import Node
     from openant.devices import ANTPLUS_NETWORK_KEY
@@ -61,13 +67,13 @@ try:
     from openant.devices.heart_rate import HeartRate, HeartRateData
     _ANTPLUS_AVAILABLE = True
 except ImportError:
-    _ANTPLUS_AVAILABLE = False
+    pass
 
 try:
     from bleak import BleakClient, BleakScanner
     _BLEAK_AVAILABLE = True
 except ImportError:
-    _BLEAK_AVAILABLE = False
+    pass
 
 __version__ = "1.0.0"
 
@@ -148,6 +154,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
 
 
 def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
+
     """Betölti és validálja a JSON beállítási fájlt.
 
     Alapértelmezett értékekből indul ki (DEFAULT_SETTINGS), majd felülírja
@@ -577,7 +584,7 @@ def is_valid_hr(hr: Any, valid_min_hr: int, valid_max_hr: int) -> bool:
 # TISZTA FÜGGVÉNYEK – ÁTLAGSZÁMÍTÁS
 # ============================================================
 
-def compute_average(samples: deque) -> Optional[float]:
+def compute_average(samples: deque[float]) -> float | None:
     """Kiszámítja a minták számtani átlagát.
 
     Args:
@@ -825,7 +832,7 @@ class PowerAverager:
         buffer_rate_hz: int = 4) -> None:
         rate = max(1, int(buffer_rate_hz))
         self.buffersize = max(1, int(buffer_seconds) * rate)
-        self.buffer: deque = deque(maxlen=self.buffersize)
+        self.buffer: deque[float] = deque(maxlen=self.buffersize)
         self.minimum_samples = minimum_samples
         # Védelem: effective_minimum soha nem nagyobb, mint a buffer fele
         self.effective_minimum = min(self.minimum_samples, max(1, self.buffersize // 2))
@@ -867,7 +874,7 @@ class HRAverager:
         buffer_rate_hz: int = 4) -> None:
         rate = max(1, int(buffer_rate_hz))
         self.buffersize = max(1, int(buffer_seconds) * rate)
-        self.buffer: deque = deque(maxlen=self.buffersize)
+        self.buffer: deque[float] = deque(maxlen=self.buffersize)
         self.minimum_samples = minimum_samples
         # Védelem: effective_minimum soha nem nagyobb, mint a buffer fele
         self.effective_minimum = min(self.minimum_samples, max(1, self.buffersize // 2))
@@ -961,7 +968,7 @@ class ControllerState:
 # ZÓNA ELKÜLDÉSE (helper)
 # ============================================================
 
-async def send_zone(zone: int, zone_queue: asyncio.Queue) -> None:
+async def send_zone(zone: int, zone_queue: asyncio.Queue[int]) -> None:
     """Zóna parancsot küld a BLE fan kimenet queue-ba.
 
     Ha a queue teli (maxsize=1), a régi parancsot elveti és az újat
@@ -1022,7 +1029,7 @@ class BLEFanOutputController:
         self._auth_failed: bool = False
         self.last_sent_time: float = 0.0
 
-    async def run(self, zone_queue: asyncio.Queue) -> None:
+    async def run(self, zone_queue: asyncio.Queue[int]) -> None:
         """A BLE fan kimenet fő korrutinja – olvassa a zone_queue-t és küldi a parancsokat.
 
         Indításkor megpróbál csatlakozni a BLE eszközhöz, majd folyamatosan
@@ -1130,7 +1137,7 @@ class BLEFanOutputController:
 
         try:
             auth_event = asyncio.Event()
-            auth_result: list = [None]
+            auth_result: list[str] = [""] 
 
             def _notify_cb(sender: Any, data: bytes) -> None:
                 auth_result[0] = data.decode("utf-8", errors="replace").strip()
@@ -1159,8 +1166,8 @@ class BLEFanOutputController:
                     logger.warning("BLE AUTH válasz timeout - folytatás autentikáció nélkül")
                     return True
 
-                resp = auth_result[0]
-                if resp is None:
+                resp: str = auth_result[0]
+                if not resp:
                     logger.error("BLE AUTH: üres válasz")
                     return False
                 if resp == "AUTH_OK":
@@ -1325,8 +1332,8 @@ class ANTPlusInputHandler:
     def __init__(
         self,
         settings: Dict[str, Any],
-        power_queue: asyncio.Queue,
-        hr_queue: asyncio.Queue,
+        power_queue: asyncio.Queue[float],
+        hr_queue: asyncio.Queue[float],
         loop: asyncio.AbstractEventLoop,
     ) -> None:
         self.settings = settings
@@ -1336,9 +1343,8 @@ class ANTPlusInputHandler:
         self.hr_queue = hr_queue
         self.loop = loop
         self._running = threading.Event()
-        self._node: Any = None
-        self._devices: list = []
-        self._lastdata = 0.0
+        self._node: Optional[Any] = None
+        self._devices: list[Any] = []
         self.power_lastdata: float = 0.0   # ← ÚJ
         self.hr_lastdata: float = 0.0      # ← ÚJ
         self.power_connected: bool = False
@@ -1432,14 +1438,14 @@ class ANTPlusInputHandler:
         while self._running.is_set():
             try:
                 self._init_node()
-                self._last_data = 0.0
+                self._lastdata = 0.0
                 self._node.start()  # Blokkoló hívás – itt vár, amíg az ANT+ fut
 
                 if not self._running.is_set():
                     break
 
                 # Ha volt sikeres adat, reseteljük a számolót
-                if self._last_data > 0:
+                if self._lastdata > 0:
                     retry_count = 0
                 else:
                     retry_count += 1
@@ -1494,7 +1500,7 @@ class BLEPowerInputHandler:
     CYCLING_POWER_MEASUREMENT_UUID = "00002a63-0000-1000-8000-00805f9b34fb"
     RETRY_RESET_SECONDS = 30
 
-    def __init__(self, settings: Dict[str, Any], power_queue: asyncio.Queue) -> None:
+    def __init__(self, settings: Dict[str, Any], power_queue: asyncio.Queue[float]) -> None:
         ds = settings["datasource"]
         self.device_name: Optional[str] = ds.get("ble_power_device_name")
         self.scan_timeout: int = ds.get("ble_power_scan_timeout", 10)
@@ -1606,7 +1612,7 @@ class BLEHRInputHandler:
     HEART_RATE_MEASUREMENT_UUID = "00002a37-0000-1000-8000-00805f9b34fb"
     RETRY_RESET_SECONDS = 30
 
-    def __init__(self, settings: Dict[str, Any], hr_queue: asyncio.Queue) -> None:
+    def __init__(self, settings: Dict[str, Any], hr_queue: asyncio.Queue[float]) -> None:
         ds = settings["datasource"]
         self.device_name: Optional[str] = ds.get("ble_hr_device_name")
         self.scan_timeout: int = ds.get("ble_hr_scan_timeout", 10)
@@ -1712,6 +1718,12 @@ class BLEHRInputHandler:
 # ZWIFT UDP BEMENŐ ADATKEZELÉS
 # ============================================================
 
+
+from typing import Any, Dict, Optional
+
+logger = logging.getLogger(__name__)
+
+
 class ZwiftUDPInputHandler:
     """Zwift UDP adatforrás fogadó – asyncio DatagramProtocol alapú.
 
@@ -1725,13 +1737,14 @@ class ZwiftUDPInputHandler:
     Attribútumok:
         process_power: True, ha a power adatokat kell feldolgozni.
         process_hr: True, ha a HR adatokat kell feldolgozni.
+        last_packet_time: utolsó érvényes ZwiftUDP csomag ideje (monotonic).
     """
 
     def __init__(
         self,
         settings: Dict[str, Any],
-        power_queue: asyncio.Queue,
-        hr_queue: asyncio.Queue,
+        power_queue: asyncio.Queue[float],
+        hr_queue: asyncio.Queue[float],
     ) -> None:
         ds = settings["datasource"]
         self.settings = settings
@@ -1739,10 +1752,15 @@ class ZwiftUDPInputHandler:
         self.port: int = ds.get("zwift_udp_port", 7878)
         self.power_queue = power_queue
         self.hr_queue = hr_queue
+
         self.process_power: bool = ds.get("power_source") == "zwiftudp"
         hr_enabled = settings.get("heart_rate_zones", {}).get("enabled", False)
         self.process_hr: bool = ds.get("hr_source") == "zwiftudp" and hr_enabled
+
         self._transport: Any = None
+
+        # HUD számára: utolsó érvényes csomag ideje
+        self.last_packet_time: float = 0.0
 
     async def run(self) -> None:
         """A Zwift UDP fogadó fő korrutinja – asyncio DatagramProtocol-t indít."""
@@ -1781,15 +1799,7 @@ class ZwiftUDPInputHandler:
             logger.error(f"Zwift UDP bind hiba: {exc}")
 
     def _process_packet(self, raw: bytes) -> None:
-        """JSON csomag feldolgozása – validáció és queue-ba helyezés.
-
-        Érvénytelen JSON vagy tartományon kívüli értékek figyelmen kívül maradnak.
-        A datagram_received callback az asyncio event loop-ból hívódik, ezért
-        az asyncio queue-ba helyezés biztonságos put_nowait-tel.
-
-        Args:
-            raw: A nyers UDP csomag bájtjai.
-        """
+        """JSON csomag feldolgozása – validáció és queue-ba helyezés."""
         try:
             data = json.loads(raw.decode("utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError):
@@ -1798,11 +1808,14 @@ class ZwiftUDPInputHandler:
         if not isinstance(data, dict):
             return
 
+        valid_any = False
+
         if self.process_power and "power" in data:
             p = data["power"]
             if isinstance(p, (int, float)) and not isinstance(p, bool) and 0 <= p <= 2500:
                 try:
                     self.power_queue.put_nowait(int(p))
+                    valid_any = True
                 except asyncio.QueueFull:
                     logger.debug("Zwift UDP: power queue teli, adat elvetve")
             else:
@@ -1814,20 +1827,27 @@ class ZwiftUDPInputHandler:
             valid_max_hr: int = hrz.get("valid_max_hr", 220)
 
             h = data["heartrate"]
+            # feltételezem, hogy van ilyen függvényed:
+            #from .utils import is_valid_hr  # ha máshol van, igazítsd
             if is_valid_hr(h, valid_min_hr, valid_max_hr):
                 try:
                     self.hr_queue.put_nowait(int(h))
+                    valid_any = True
                 except asyncio.QueueFull:
                     logger.debug("Zwift UDP: hr queue teli, adat elvetve")
             else:
                 logger.debug(f"Zwift UDP: érvénytelen heartrate: {h}")
+
+        # Ha bármilyen érvényes adatot elfogadtunk, frissítjük az időbélyeget
+        if valid_any:
+            self.last_packet_time = time.monotonic()
 
 # ============================================================
 # POWER FELDOLGOZÓ KORRUTIN
 # ============================================================
 
 async def power_processor_task(
-    raw_power_queue: asyncio.Queue,
+    raw_power_queue: asyncio.Queue[float],
     state: ControllerState,
     zone_event: asyncio.Event,
     power_averager: PowerAverager,
@@ -1904,7 +1924,7 @@ async def power_processor_task(
 # ============================================================
 
 async def hr_processor_task(
-    raw_hr_queue: asyncio.Queue,
+    raw_hr_queue: asyncio.Queue[float],
     state: ControllerState,
     zone_event: asyncio.Event,
     hr_averager: HRAverager,
@@ -2001,7 +2021,7 @@ async def hr_processor_task(
 
 async def zone_controller_task(
     state: ControllerState,
-    zone_queue: asyncio.Queue,
+    zone_queue: asyncio.Queue[int],
     cooldown_ctrl: CooldownController,
     settings: Dict[str, Any],
     zone_event: asyncio.Event,
@@ -2080,7 +2100,7 @@ async def zone_controller_task(
 
 async def dropout_checker_task(
     state: ControllerState,
-    zonequeue: asyncio.Queue,
+    zonequeue: asyncio.Queue[int],
     settings: Dict[str, Any],
     poweraverager: PowerAverager,
     hraverager: HRAverager,
@@ -2474,83 +2494,122 @@ class HUDWindow:
 
     def __init__(self, controller: "FanController") -> None:
         self._ctrl = controller
+
+        # ───────── ROOT ABLAK ─────────
         self._root = tk.Tk()
         self._root.title("Fan HUD")
         self._root.attributes("-topmost", True)
         self._root.attributes("-alpha", 0.85)
-        self._root.overrideredirect(True)  # keret nélküli ablak
-        self._root.geometry("260x210+20+20")
+        self._root.overrideredirect(True)
+        self._root.geometry("260x280+20+20")
         self._root.configure(bg="black")
 
-        font_big  = ("Consolas", 18, "bold")
+        font_big = ("Consolas", 18, "bold")
         font_small = ("Consolas", 11)
 
-        self._lbl_zone  = tk.Label(self._root, text="Zóna: –", fg="#00FF88", bg="black", font=font_big)
-        self._lbl_power = tk.Label(self._root, text="Power: – W",   fg="#FFD700", bg="black", font=font_small)
-        self._lbl_hr    = tk.Label(self._root, text="HR: – bpm",     fg="#FF6666", bg="black", font=font_small)
-        self._lbl_ble   = tk.Label(self._root, text="BLE: –",        fg="#AAAAAA", bg="black", font=font_small)
-        self._lbl_cool  = tk.Label(self._root, text="Cooldown: –",   fg="#AAAAAA", bg="black", font=font_small)
+        # ───────── LABEL-EK ─────────
+        self._lbl_zone = tk.Label(self._root, text="Zóna: –", fg="#00FF88", bg="black", font=font_big)
+        self._lbl_power = tk.Label(self._root, text="Power: – W", fg="#FFD700", bg="black", font=font_small)
+        self._lbl_hr = tk.Label(self._root, text="HR: – bpm", fg="#FF6666", bg="black", font=font_small)
+        self._lbl_ble = tk.Label(self._root, text="BLE: –", fg="#AAAAAA", bg="black", font=font_small)
+        self._lbl_ant = tk.Label(self._root, text="ANT+: –", fg="#AAAAAA", bg="black", font=font_small)
+        self._lbl_zwift_udp = tk.Label(self._root, text="ZwiftUDP: –", fg="#AAAAAA", bg="black", font=font_small)
+        self._lbl_last_sent = tk.Label(self._root, text="Utolsó küldés: –", fg="#AAAAAA", bg="black", font=font_small)
+        self._lbl_cool = tk.Label(self._root, text="Cooldown: –", fg="#AAAAAA", bg="black", font=font_small)
 
         self._lbl_zone.pack(pady=(10, 2))
         self._lbl_power.pack()
         self._lbl_hr.pack()
         self._lbl_ble.pack()
-        self._lbl_ant = tk.Label(
-        self._root, text="ANT+: –",
-        fg="#AAAAAA", bg="black", font=font_small
-        )
         self._lbl_ant.pack()
-
-        self._lbl_last_sent = tk.Label(
-        self._root, text="Utolsó küldés: –",
-            fg="#AAAAAA", bg="black", font=font_small
-        )
+        self._lbl_zwift_udp.pack()
         self._lbl_last_sent.pack()
-
         self._lbl_cool.pack(pady=(2, 8))
-                # Átlátszóság csúszka
+
+        # ───────── ÁTLÁTSZÓSÁG SLIDER ─────────
+        self._slider_frame = tk.Frame(self._root, bg="#1a1a1a", relief="raised", bd=1)
+        self._slider_frame.pack(pady=(8, 12), padx=8, fill=tk.X)
+
+        tk.Label(
+            self._slider_frame, text="Átlátszóság:", fg="#00FF88", bg="#1a1a1a",
+            font=("Consolas", 11, "bold")
+        ).pack(side=tk.LEFT)
+
+        self._alpha_value = tk.Label(
+            self._slider_frame, text="85%", fg="#00FF88", bg="#1a1a1a",
+            font=("Consolas", 12, "bold"), width=4
+        )
+        self._alpha_value.pack(side=tk.RIGHT, padx=(10, 0))
+
         self._alpha_slider = tk.Scale(
-            self._root,
-            from_=20, to=100,
-            orient=tk.HORIZONTAL,
-            label="Átlátszóság %",
-            fg="#AAAAAA", bg="black",
-            highlightbackground="black",
-            troughcolor="#333333",
-            command=self._on_alpha_change,
-            length=220,
+            self._slider_frame, from_=20, to=100, orient=tk.HORIZONTAL,
+            fg="#00FF88", bg="#1a1a1a", troughcolor="#555555",
+            activebackground="#00AA44", highlightbackground="#00FF88",
+            highlightthickness=2, borderwidth=1, relief="solid",
+            command=self._on_alpha_change, showvalue=0,
+            length=160, width=25
         )
         self._alpha_slider.set(85)
-        self._alpha_slider.pack(pady=(0, 6))
+        self._alpha_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 0))
 
-
-        # Ablak húzhatóvá tétele (keret nélküli ablakhoz)
+        # ───────── DRAG VÁLTOZÓK ─────────
         self._drag_x = 0
         self._drag_y = 0
-        self._root.bind("<ButtonPress-1>",   self._on_drag_start)
-        self._root.bind("<B1-Motion>",       self._on_drag_move)
-                # Bezárás: Escape gomb
-        self._root.bind("<Escape>", lambda e: self.close())
 
-        # Jobb klikk kontextusmenü
+        # Csak label-ek + háttér húzzák az ablakot
+        draggable_labels = [
+            self._lbl_zone, self._lbl_power, self._lbl_hr,
+            self._lbl_ble, self._lbl_ant, self._lbl_zwift_udp,
+            self._lbl_last_sent, self._lbl_cool
+        ]
+        for lbl in draggable_labels:
+            lbl.bind("<ButtonPress-1>", self._on_drag_start)
+            lbl.bind("<B1-Motion>", self._on_drag_move)
+
+        # Root háttér
+        self._root.bind("<ButtonPress-1>", self._on_drag_start)
+        self._root.bind("<B1-Motion>", self._on_drag_move)
+
+        # ───────── EGYÉB BIND-EK ─────────
+        self._root.bind("<Escape>", lambda e: self.close())
+        self._root.bind("<ButtonPress-3>", self._show_menu)
+
+        # ───────── KONTEXTUS MENÜ ─────────
         self._menu = tk.Menu(self._root, tearoff=0)
         self._menu.add_command(label="Bezárás", command=self.close)
         self._menu.add_separator()
-        self._menu.add_command(label="Átlátszóság: 50%",
-                            command=lambda: self._root.attributes("-alpha", 0.5))
-        self._menu.add_command(label="Átlátszóság: 85%",
-                            command=lambda: self._root.attributes("-alpha", 0.85))
-        self._menu.add_command(label="Átlátszóság: 100%",
-                            command=lambda: self._root.attributes("-alpha", 1.0))
-        self._root.bind("<ButtonPress-3>", self._show_menu)
+        self._menu.add_command(label="Átlátszóság: 50%", command=lambda: self._set_alpha_from_menu(50))
+        self._menu.add_command(label="Átlátszóság: 85%", command=lambda: self._set_alpha_from_menu(85))
+        self._menu.add_command(label="Átlátszóság: 100%", command=lambda: self._set_alpha_from_menu(100))
 
         self._update()
 
+    # ───────── SEGÉDFÜGGVÉNYEK ─────────
+
+    def _set_alpha_from_menu(self, percent: int) -> None:
+        self._root.attributes("-alpha", percent / 100.0)
+        self._alpha_slider.set(percent)
+        self._alpha_value.config(text=f"{percent}%")
+
+    def _on_alpha_change(self, value: str) -> None:
+        try:
+            v = int(float(value))
+        except ValueError:
+            return
+        alpha = v / 100.0
+        self._root.attributes("-alpha", alpha)
+        self._alpha_value.config(text=f"{v}%")
+
     def _on_drag_start(self, event: tk.Event) -> None:
+        # Ha a slider frame-ben vagyunk (csúszka, százalék label, stb.), ne mozgassuk az ablakot
+        if event.widget in (self._alpha_slider, self._alpha_value, self._slider_frame):
+            return
         self._drag_x = event.x
         self._drag_y = event.y
 
     def _on_drag_move(self, event: tk.Event) -> None:
+        if event.widget in (self._alpha_slider, self._alpha_value, self._slider_frame):
+            return
         x = self._root.winfo_x() + event.x - self._drag_x
         y = self._root.winfo_y() + event.y - self._drag_y
         self._root.geometry(f"+{x}+{y}")
@@ -2561,81 +2620,80 @@ class HUDWindow:
         finally:
             self._menu.grab_release()
 
-    def _on_alpha_change(self, value: str) -> None:
-        self._root.attributes("-alpha", int(value) / 100)
-
+    # ───────── FRISSÍTÉS ─────────
 
     def _update(self) -> None:
-        """Adatok frissítése a controllerből – 500ms-enként."""
-        state   = self._ctrl._state
+        state = self._ctrl._state
         ble_fan = self._ctrl._ble_fan
-        cool    = self._ctrl._cooldown_ctrl
+        cool = self._ctrl._cooldown_ctrl
 
         if state is not None:
-            zone  = state.current_zone
+            zone = state.current_zone
             power = state.current_avg_power
-            hr    = state.current_avg_hr
+            hr = state.current_avg_hr
 
             zone_colors = {0: "#888888", 1: "#00FF88", 2: "#FFD700", 3: "#FF4444"}
             color = zone_colors.get(zone, "#FFFFFF") if zone is not None else "#888888"
-            self._lbl_zone.config(
-                text=f"Zóna: {'–' if zone is None else zone}",
-                fg=color,
-            )
 
-            self._lbl_power.config(
-                text=f"Power: {'–' if power is None else f'{power:.0f} W'}"
-            )
-            self._lbl_hr.config(
-                text=f"HR: {'–' if hr is None else f'{hr:.0f} bpm'}"
-            )
+            self._lbl_zone.config(text=f"Zóna: {'–' if zone is None else zone}", fg=color)
+            self._lbl_power.config(text=f"Power: {'–' if power is None else f'{power:.0f} W'}")
+            self._lbl_hr.config(text=f"HR: {'–' if hr is None else f'{hr:.0f} bpm'}")
 
+        # BLE
         if ble_fan is not None:
             connected = ble_fan.is_connected
             status = "✓ Csatlakozva" if connected else "✗ Nincs csatlakozva"
-            ble_color = "#00FF88" if connected else "#FF4444"
-            self._lbl_ble.config(text=f"BLE: {status}", fg=ble_color)
+            color = "#00FF88" if connected else "#FF4444"
+            self._lbl_ble.config(text=f"BLE: {status}", fg=color)
+        else:
+            self._lbl_ble.config(text="BLE: –", fg="#AAAAAA")
 
-        # ANT+ – BLE-től független blokk
-        ant = getattr(self._ctrl, '_antplus_handler', None)  # ← __init__-ben ez a név
+        # ANT+
+        ant = getattr(self._ctrl, "_antplus_handler", None)
         if ant is not None:
             now = time.monotonic()
             power_ok = (ant.power_lastdata > 0) and (now - ant.power_lastdata < 10)
-            hr_ok    = (ant.hr_lastdata > 0)    and (now - ant.hr_lastdata < 10)
+            hr_ok = (ant.hr_lastdata > 0) and (now - ant.hr_lastdata < 10)
             p_txt = "✓" if power_ok else "✗"
-            h_txt = "✓" if hr_ok    else "✗"
-            self._lbl_ant.config(
-                text=f"ANT+  P:{p_txt}  HR:{h_txt}",
-                fg="#00FF88" if (power_ok and hr_ok)
-                else "#FF4444" if (not power_ok and not hr_ok)
-                else "#FFD700",
-            )
+            h_txt = "✓" if hr_ok else "✗"
+            color = "#00FF88" if (power_ok and hr_ok) else "#FFD700" if (power_ok or hr_ok) else "#FF4444"
+            self._lbl_ant.config(text=f"ANT+ P:{p_txt} HR:{h_txt}", fg=color)
         else:
             self._lbl_ant.config(text="ANT+: –", fg="#AAAAAA")
 
-            if ble_fan is not None and ble_fan.last_sent_time > 0:
-                ago = __import__("time").monotonic() - ble_fan.last_sent_time
-                self._lbl_last_sent.config(text=f"Utolsó küldés: {ago:.0f}s")
-            else:
-                self._lbl_last_sent.config(text="Utolsó küldés: –")
+        # ZwiftUDP státusz
+        zwift = getattr(self._ctrl, "_zwift_udp", None)
+        if zwift is not None and (zwift.process_power or zwift.process_hr):
+            now = time.monotonic()
+            ok = zwift.last_packet_time > 0 and (now - zwift.last_packet_time) < 5.0
+            status = "✓ ZwiftUDP" if ok else "✗ ZwiftUDP"
+            color = "#00FF88" if ok else "#FF4444"
+            self._lbl_zwift_udp.config(text=f"ZwiftUDP: {status}", fg=color)
+        else:
+            self._lbl_zwift_udp.config(text="ZwiftUDP: –", fg="#AAAAAA")
 
+        # Utolsó küldés
+        if ble_fan is not None and getattr(ble_fan, "last_sent_time", 0) > 0:
+            ago = time.monotonic() - ble_fan.last_sent_time
+            self._lbl_last_sent.config(text=f"Utolsó küldés: {ago:.0f}s")
+        else:
+            self._lbl_last_sent.config(text="Utolsó küldés: –")
 
-        if cool is not None and cool.active:
-            remaining = cool.cooldown_seconds - (
-                __import__("time").monotonic() - cool.start_time
-            )
+        # Cooldown
+        if cool is not None and getattr(cool, "active", False):
+            remaining = cool.cooldown_seconds - (time.monotonic() - cool.start_time)
             self._lbl_cool.config(text=f"Cooldown: {remaining:.0f}s")
         else:
             self._lbl_cool.config(text="Cooldown: –")
 
         self._root.after(self.UPDATE_INTERVAL_MS, self._update)
 
+    # ───────── FUTTATÁS / BEZÁRÁS ─────────
+
     def run(self) -> None:
-        """Elindítja a tkinter főciklust (blokkoló!)."""
         self._root.mainloop()
 
     def close(self) -> None:
-        """Bezárja a HUD ablakot."""
         try:
             self._root.destroy()
         except Exception:

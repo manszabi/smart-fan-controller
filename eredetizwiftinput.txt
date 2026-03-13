@@ -1,0 +1,109 @@
+class ZwiftUDPInputHandler:
+    """Zwift UDP adatforrás fogadó – asyncio DatagramProtocol alapú.
+
+    A zwift-udp-monitor programból érkező JSON csomagokat fogadja UDP-n.
+    Asyncio DatagramProtocol alapú implementáció, teljesen non-blocking.
+    Érvényes power és HR értékeket az asyncio queue-kba teszi.
+
+    JSON formátum:
+        {"power": int, "heartrate": int}
+
+    Attribútumok:
+        process_power: True, ha a power adatokat kell feldolgozni.
+        process_hr: True, ha a HR adatokat kell feldolgozni.
+    """
+
+    def __init__(
+        self,
+        settings: Dict[str, Any],
+        power_queue: asyncio.Queue[float],
+        hr_queue: asyncio.Queue[float],
+    ) -> None:
+        ds = settings["datasource"]
+        self.settings = settings
+        self.host: str = ds.get("zwift_udp_host", "127.0.0.1")
+        self.port: int = ds.get("zwift_udp_port", 7878)
+        self.power_queue = power_queue
+        self.hr_queue = hr_queue
+        self.process_power: bool = ds.get("power_source") == "zwiftudp"
+        hr_enabled = settings.get("heart_rate_zones", {}).get("enabled", False)
+        self.process_hr: bool = ds.get("hr_source") == "zwiftudp" and hr_enabled
+        self._transport: Any = None
+
+    async def run(self) -> None:
+        """A Zwift UDP fogadó fő korrutinja – asyncio DatagramProtocol-t indít."""
+        loop = asyncio.get_event_loop()
+        logger.info(f"Zwift UDP fogadó elindítva: {self.host}:{self.port}")
+
+        handler = self
+
+        class _Protocol(asyncio.DatagramProtocol):
+            def connection_made(self, transport: Any) -> None:
+                logger.info(f"Zwift UDP socket kötve: {handler.host}:{handler.port}")
+                handler._transport = transport
+
+            def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
+                handler._process_packet(data)
+
+            def error_received(self, exc: Exception) -> None:
+                logger.warning(f"Zwift UDP hiba: {exc}")
+
+            def connection_lost(self, exc: Optional[Exception]) -> None:
+                logger.info("Zwift UDP kapcsolat lezárva")
+
+        try:
+            transport, _ = await loop.create_datagram_endpoint(
+                _Protocol,
+                local_addr=(self.host, self.port),
+            )
+            try:
+                while True:
+                    await asyncio.sleep(3600)
+            finally:
+                transport.close()
+        except asyncio.CancelledError:
+            raise
+        except OSError as exc:
+            logger.error(f"Zwift UDP bind hiba: {exc}")
+
+    def _process_packet(self, raw: bytes) -> None:
+        """JSON csomag feldolgozása – validáció és queue-ba helyezés.
+
+        Érvénytelen JSON vagy tartományon kívüli értékek figyelmen kívül maradnak.
+        A datagram_received callback az asyncio event loop-ból hívódik, ezért
+        az asyncio queue-ba helyezés biztonságos put_nowait-tel.
+
+        Args:
+            raw: A nyers UDP csomag bájtjai.
+        """
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return
+
+        if not isinstance(data, dict):
+            return
+
+        if self.process_power and "power" in data:
+            p = data["power"]
+            if isinstance(p, (int, float)) and not isinstance(p, bool) and 0 <= p <= 2500:
+                try:
+                    self.power_queue.put_nowait(int(p))
+                except asyncio.QueueFull:
+                    logger.debug("Zwift UDP: power queue teli, adat elvetve")
+            else:
+                logger.debug(f"Zwift UDP: érvénytelen power: {p}")
+
+        if self.process_hr and "heartrate" in data:
+            hrz = self.settings.get("heart_rate_zones", {})
+            valid_min_hr: int = hrz.get("valid_min_hr", 30)
+            valid_max_hr: int = hrz.get("valid_max_hr", 220)
+
+            h = data["heartrate"]
+            if is_valid_hr(h, valid_min_hr, valid_max_hr):
+                try:
+                    self.hr_queue.put_nowait(int(h))
+                except asyncio.QueueFull:
+                    logger.debug("Zwift UDP: hr queue teli, adat elvetve")
+            else:
+                logger.debug(f"Zwift UDP: érvénytelen heartrate: {h}")
