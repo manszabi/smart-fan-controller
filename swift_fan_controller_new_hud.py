@@ -1509,6 +1509,8 @@ class BLEPowerInputHandler:
         self.power_queue = power_queue
         self.is_connected = False
         self._retry_count = 0
+        
+        self.power_lastdata = 0.0
 
     async def run(self) -> None:
         """A BLE power fogadó fő korrutinja – újracsatlakozási logikával."""
@@ -1573,6 +1575,8 @@ class BLEPowerInputHandler:
                     if len(data) < 4:
                         return
                     power = int.from_bytes(data[2:4], byteorder="little", signed=True)
+                    # <<< BLE POWER TIMESTAMP FRISSÍTÉS
+                    self.power_lastdata = time.monotonic()
                     try:
                         self.power_queue.put_nowait(power)
                     except asyncio.QueueFull:
@@ -1621,6 +1625,7 @@ class BLEHRInputHandler:
         self.hr_queue = hr_queue
         self.is_connected = False
         self._retry_count = 0
+        self.hr_lastdata = 0.0
 
     async def run(self) -> None:
         """A BLE HR fogadó fő korrutinja – újracsatlakozási logikával."""
@@ -1693,6 +1698,7 @@ class BLEHRInputHandler:
                         hr = int.from_bytes(data[1:3], byteorder="little")
                     else:
                         hr = data[1]
+                    self.hr_lastdata = time.monotonic()
                     future = asyncio.run_coroutine_threadsafe(
                         self.hr_queue.put(hr), loop
                     )
@@ -2175,6 +2181,23 @@ async def dropout_checker_task(
         if send_dropout:
             await send_zone(0, zonequeue)
 
+class BLECombinedSensor:
+    def __init__(self, power_handler=None, hr_handler=None):
+        self.power_handler = power_handler
+        self.hr_handler = hr_handler
+
+    @property
+    def power_lastdata(self):
+        if self.power_handler:
+            return getattr(self.power_handler, "power_lastdata", 0)
+        return 0
+
+    @property
+    def hr_lastdata(self):
+        if self.hr_handler:
+            return getattr(self.hr_handler, "hr_lastdata", 0)
+        return 0
+
 # ============================================================
 # FAN CONTROLLER – FŐ ÖSSZEHANGOLÁS
 # ============================================================
@@ -2339,6 +2362,11 @@ class FanController:
             self._tasks.append(asyncio.create_task(
                 ble_hr.run(), name="BLEHRInput"
             ))
+        # BLE input handlerek után:
+        self._ble_sensor_handler = BLECombinedSensor(
+            power_handler=self._ble_power,
+            hr_handler=self._ble_hr
+        )
 
         needs_zwift = (power_source == "zwiftudp") or (hr_source == "zwiftudp" and hr_enabled)
         if needs_zwift:
@@ -2463,7 +2491,6 @@ class FanController:
             if self._antplus_thread.is_alive():
                 logger.warning("ANT+ szál nem állt le 5s alatt!")
 
-
         # Zwift subprocess leállítása
         if hasattr(self, "_zwift_proc") and self._zwift_proc is not None:
             if self._zwift_proc.poll() is None:  # csak ha még fut
@@ -2501,7 +2528,7 @@ class HUDWindow:
         self._root.attributes("-topmost", True)
         self._root.attributes("-alpha", 0.85)
         self._root.overrideredirect(True)
-        self._root.geometry("260x280+20+20")
+        self._root.geometry("260x300+20+20")
         self._root.configure(bg="black")
 
         font_big = ("Consolas", 18, "bold")
@@ -2512,6 +2539,7 @@ class HUDWindow:
         self._lbl_power = tk.Label(self._root, text="Power: – W", fg="#FFD700", bg="black", font=font_small)
         self._lbl_hr = tk.Label(self._root, text="HR: – bpm", fg="#FF6666", bg="black", font=font_small)
         self._lbl_ble = tk.Label(self._root, text="BLE: –", fg="#AAAAAA", bg="black", font=font_small)
+        self._lbl_ble_sens = tk.Label(self._root, text="BLE P: – HR: –", fg="#AAAAAA", bg="black", font=font_small)
         self._lbl_ant = tk.Label(self._root, text="ANT+: –", fg="#AAAAAA", bg="black", font=font_small)
         self._lbl_zwift_udp = tk.Label(self._root, text="ZwiftUDP: –", fg="#AAAAAA", bg="black", font=font_small)
         self._lbl_last_sent = tk.Label(self._root, text="Utolsó küldés: –", fg="#AAAAAA", bg="black", font=font_small)
@@ -2522,6 +2550,7 @@ class HUDWindow:
         self._lbl_hr.pack()
         self._lbl_ble.pack()
         self._lbl_ant.pack()
+        self._lbl_ble_sens.pack()
         self._lbl_zwift_udp.pack()
         self._lbl_last_sent.pack()
         self._lbl_cool.pack(pady=(2, 8))
@@ -2642,11 +2671,24 @@ class HUDWindow:
         # BLE
         if ble_fan is not None:
             connected = ble_fan.is_connected
-            status = "✓ Csatlakozva" if connected else "✗ Nincs csatlakozva"
+            status = "✓" if connected else "✗"
             color = "#00FF88" if connected else "#FF4444"
-            self._lbl_ble.config(text=f"BLE: {status}", fg=color)
+            self._lbl_ble.config(text=f"BLE esp32 vent: {status}", fg=color)
         else:
             self._lbl_ble.config(text="BLE: –", fg="#AAAAAA")
+        
+        # BLE szenzorok (pulzusmérő / teljesítménymérő)
+        ble = getattr(self._ctrl, "_ble_sensor_handler", None)
+        if ble is not None:
+            now = time.monotonic()
+            power_ok = (ble.power_lastdata > 0) and (now - ble.power_lastdata < 10)
+            hr_ok = (ble.hr_lastdata > 0) and (now - ble.hr_lastdata < 10)
+            p_txt = "✓" if power_ok else "✗"
+            h_txt = "✓" if hr_ok else "✗"
+            color = "#00FF88" if (power_ok and hr_ok) else "#FFD700" if (power_ok or hr_ok) else "#FF4444"
+            self._lbl_ble_sens.config(text=f"BLE P:{p_txt} HR:{h_txt}", fg=color)
+        else:
+            self._lbl_ble_sens.config(text="BLE: –", fg="#AAAAAA")
 
         # ANT+
         ant = getattr(self._ctrl, "_antplus_handler", None)
@@ -2752,12 +2794,18 @@ def main() -> None:
     finally:
         hud.close()
         cleanup()         # ← ELŐBB stop (még nyitott loop-on)
+
+        # engedjük lefutni a cancel-eket
+        loop.call_soon_threadsafe(lambda: None)
+        time.sleep(0.1)
+
+        # most már biztonságos leállítani a loop-ot
         try:
             loop.call_soon_threadsafe(loop.stop)
         except Exception:
             pass
+
         asyncio_thread.join(timeout=3.0)
-        
         print("\nProgram leállítva.")
 
 
