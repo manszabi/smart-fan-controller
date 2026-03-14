@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 """
-swift_fan_controller_new.py
+swift_fan_controller_new_v2.py
 
 Smart Fan Controller – moduláris, párhuzamos implementáció.
 
@@ -2815,5 +2815,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
