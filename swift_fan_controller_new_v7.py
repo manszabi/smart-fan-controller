@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 """
-swift_fan_controller_new_v2.py
+swift_fan_controller_new_v7.py
 
 Smart Fan Controller – moduláris, párhuzamos implementáció.
 
@@ -33,6 +33,7 @@ Verziószám: 1.0.0
 import asyncio
 import copy
 import dataclasses
+import enum
 import json
 import logging
 import math
@@ -49,12 +50,20 @@ from collections import deque
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Tuple, TYPE_CHECKING
 
-# --- Típus aliasok a magic string-ek kiváltásához ---
-DataSource = Literal["antplus", "ble", "zwiftudp"]
-ZoneMode = Literal["power_only", "hr_only", "higher_wins"]
+# --- Enum-ok a magic string-ek kiváltásához ---
+# str öröklés: JSON-ból jövő string értékekkel is kompatibilis (==)
+class DataSource(str, enum.Enum):
+    ANTPLUS = "antplus"
+    BLE = "ble"
+    ZWIFTUDP = "zwiftudp"
 
-VALID_POWER_SOURCES: tuple = ("antplus", "ble", "zwiftudp")
-VALID_ZONE_MODES: tuple = ("power_only", "hr_only", "higher_wins")
+class ZoneMode(str, enum.Enum):
+    POWER_ONLY = "power_only"
+    HR_ONLY = "hr_only"
+    HIGHER_WINS = "higher_wins"
+
+VALID_DATA_SOURCES: tuple = tuple(DataSource)
+VALID_ZONE_MODES: tuple = tuple(ZoneMode)
 
 Node: Any = None
 ANTPLUS_NETWORK_KEY: Any = None
@@ -135,8 +144,8 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
         "pin_code": None,
     },
     "datasource": {
-        "power_source": "antplus",
-        "hr_source": "antplus",
+        "power_source": DataSource.ANTPLUS,
+        "hr_source": DataSource.ANTPLUS,
         "BLE_buffer_seconds": 3,
         "BLE_minimum_samples": 6,
         "BLE_buffer_rate_hz": 4,
@@ -164,7 +173,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
         "enabled": False,
         "max_hr": 185,
         "resting_hr": 60,
-        "zone_mode": "power_only",
+        "zone_mode": ZoneMode.POWER_ONLY,
         "z1_max_percent": 70,
         "z2_max_percent": 80,
         "valid_min_hr": 30,
@@ -265,9 +274,9 @@ def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
     if isinstance(loaded.get("datasource"), dict):
         ds = loaded["datasource"]
 
-        if ds.get("power_source") in VALID_POWER_SOURCES:
+        if ds.get("power_source") in VALID_DATA_SOURCES:
             settings["datasource"]["power_source"] = ds["power_source"]
-        if ds.get("hr_source") in VALID_POWER_SOURCES:
+        if ds.get("hr_source") in VALID_DATA_SOURCES:
             settings["datasource"]["hr_source"] = ds["hr_source"]
 
         for key in ("ble_power_device_name", "ble_hr_device_name"):
@@ -503,11 +512,11 @@ def _resolve_buffer_settings(settings: Dict[str, Any], role: str) -> Dict[str, A
     """
     ds = settings["datasource"]
     source_key = "power_source" if role == "power" else "hr_source"
-    source = ds.get(source_key, "antplus")
+    source = ds.get(source_key, DataSource.ANTPLUS)
 
-    if source == "ble":
+    if source == DataSource.BLE:
         prefix = "BLE"
-    elif source == "antplus":
+    elif source == DataSource.ANTPLUS:
         prefix = "ANT"
     else:  # zwiftudp
         prefix = "zwiftUDP"
@@ -731,9 +740,9 @@ def apply_zone_mode(
     Returns:
         A végső zóna szám (0–3), vagy None ha nincs elég adat.
     """
-    if zone_mode == "power_only":
+    if zone_mode == ZoneMode.POWER_ONLY:
         return power_zone
-    if zone_mode == "hr_only":
+    if zone_mode == ZoneMode.HR_ONLY:
         return hr_zone
     # higher_wins: mindkét forrásból a nagyobb
     if power_zone is not None and hr_zone is not None:
@@ -770,6 +779,7 @@ class CooldownController:
     PRINT_INTERVAL = 10.0
 
     def __init__(self, cooldown_seconds: int) -> None:
+        self._lock = threading.Lock()
         self.cooldown_seconds = cooldown_seconds
         self.active = False
         self.start_time = 0.0
@@ -794,17 +804,27 @@ class CooldownController:
         Returns:
             A küldendő zóna szintje, ha változás szükséges; None egyébként.
         """
+        with self._lock:
+            return self._process_locked(current_zone, new_zone, zero_immediate)
+
+    def _process_locked(
+        self,
+        current_zone: Optional[int],
+        new_zone: int,
+        zero_immediate: bool,
+    ) -> Optional[int]:
+        """Belső process logika – lock alatt hívandó."""
         now = time.monotonic()
 
         # Első döntés – nincs előző zóna
         if current_zone is None:
-            self._reset()
+            self._reset_locked()
             return new_zone
 
         # 0W azonnali leállás (zero_power_immediate=True)
         if new_zone == 0 and zero_immediate:
             if current_zone != 0:
-                self._reset()
+                self._reset_locked()
                 print("✓ 0W detektálva: azonnali leállás (cooldown nélkül)")
                 return 0
             return None
@@ -845,10 +865,10 @@ class CooldownController:
     def _handle_active(
         self, current_zone: int, new_zone: int, now: float
     ) -> Optional[int]:
-        """Aktív cooldown feldolgozása."""
+        """Aktív cooldown feldolgozása – lock alatt hívandó."""
         # Zóna emelkedés → cooldown törlése
         if new_zone >= current_zone:
-            self._reset()
+            self._reset_locked()
             if new_zone > current_zone:
                 print(f"✓ Teljesítmény emelkedés: cooldown törölve → zóna: {new_zone}")
                 return new_zone
@@ -859,7 +879,7 @@ class CooldownController:
         # Cooldown lejárt
         if elapsed >= self.cooldown_seconds:
             target = new_zone
-            self._reset()
+            self._reset_locked()
             if target != current_zone:
                 print(f"✓ Cooldown lejárt! Zóna váltás: {current_zone} → {target}")
                 return target
@@ -915,23 +935,36 @@ class CooldownController:
         self.can_halve = True
         print(f"🕐 Cooldown duplázva: {remaining:.0f}s → {new_remaining:.0f}s")
 
-    def _reset(self) -> None:
-        """Törli a cooldown állapotát."""
+    def reset(self) -> None:
+        """Törli a cooldown állapotát (publikus API, szálbiztos)."""
+        with self._lock:
+            self._reset_locked()
+
+    def _reset_locked(self) -> None:
+        """Törli a cooldown állapotát – lock alatt hívandó."""
         self.active = False
         self.pending_zone = None
         self.can_halve = True
         self.can_double = False
 
     def snapshot(self) -> Tuple[bool, float]:
-        """Szálbiztos(abb) pillanatfelvétel a HUD számára.
+        """Szálbiztos pillanatfelvétel a HUD számára.
 
         Returns:
             (active, remaining_seconds) tuple.
         """
-        if not self.active:
-            return False, 0.0
-        remaining = max(0.0, self.cooldown_seconds - (time.monotonic() - self.start_time))
-        return True, remaining
+        with self._lock:
+            if not self.active:
+                return False, 0.0
+            remaining = max(0.0, self.cooldown_seconds - (time.monotonic() - self.start_time))
+            return True, remaining
+
+    def __repr__(self) -> str:
+        active, remaining = self.snapshot()
+        return (
+            f"CooldownController(active={active}, remaining={remaining:.1f}s, "
+            f"pending_zone={self.pending_zone}, cooldown={self.cooldown_seconds}s)"
+        )
 
 
 # ============================================================
@@ -1044,8 +1077,14 @@ class ConsolePrinter:
             return True
         return False
 
-    # Visszafelé kompatibilitás – régi .print() hívások is működnek
     def print(self, key: str, message: str, interval: float = 1.0) -> bool:
+        """Deprecated: használd az emit()-et. Elfedi a beépített print()-et."""
+        import warnings
+        warnings.warn(
+            "ConsolePrinter.print() deprecated, használd az emit()-et",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return self.emit(key, message, interval)
 
 
@@ -1066,7 +1105,7 @@ class UISnapshot:
     zone: Optional[int] = None
     avg_power: Optional[float] = None
     avg_hr: Optional[float] = None
-    _lock: threading.Lock = dataclasses.field(default_factory=threading.Lock)
+    _lock: threading.Lock = dataclasses.field(default_factory=threading.Lock, repr=False)
 
     def update(
         self,
@@ -1124,13 +1163,20 @@ class ControllerState:
         self.lock = asyncio.Lock()
         self.ui_snapshot = UISnapshot()
 
+    def __repr__(self) -> str:
+        return (
+            f"ControllerState(zone={self.current_zone}, "
+            f"power_zone={self.current_power_zone}, hr_zone={self.current_hr_zone}, "
+            f"avg_power={self.current_avg_power}, avg_hr={self.current_avg_hr})"
+        )
+
 
 # ============================================================
 # ZÓNA ELKÜLDÉSE (helper)
 # ============================================================
 
 
-async def send_zone(zone: int, zone_queue: asyncio.Queue) -> None:
+async def send_zone(zone: int, zone_queue: asyncio.Queue[int]) -> None:
     """Zóna parancsot küld a BLE fan kimenet queue-ba.
 
     Ha a queue teli (maxsize=1), a régi parancsot elveti és az újat
@@ -1256,7 +1302,7 @@ async def _scan_ble_with_autodiscovery(
             devices_info.append((dev_name, dev_addr, uuids))
 
             if target_service_uuid and matched is None:
-                if target_service_uuid.lower() in [u.lower() for u in uuids]:
+                if any(u.lower() == target_service_uuid.lower() for u in uuids):
                     matched = device
 
     except TypeError:
@@ -1323,7 +1369,14 @@ class BLEFanOutputController:
         # Utolsó reconnect kísérlet ideje – non-blocking reconnect logikához
         self._last_reconnect_attempt: float = 0.0
 
-    async def run(self, zone_queue: asyncio.Queue) -> None:
+    def __repr__(self) -> str:
+        return (
+            f"BLEFanOutputController(device={self.device_name!r}, "
+            f"connected={self.is_connected}, last_sent={self.last_sent}, "
+            f"retries={self._retry_count}/{self.max_retries})"
+        )
+
+    async def run(self, zone_queue: asyncio.Queue[int]) -> None:
         """A BLE fan kimenet fő korrutinja – olvassa a zone_queue-t és küldi a parancsokat.
 
         Indításkor megpróbál csatlakozni a BLE eszközhöz, majd folyamatosan
@@ -1335,7 +1388,6 @@ class BLEFanOutputController:
         if not _BLEAK_AVAILABLE:
             msg = "BLE Fan: bleak könyvtár nem elérhető – BLE kimenet letiltva!"
             logger.error(msg)
-            print(f"✗ {msg}")
             return
 
         logger.info("BLE Fan Output korrutin elindítva")
@@ -1530,11 +1582,18 @@ class BLEFanOutputController:
     def _on_disconnect(self, client: Any) -> None:
         """Callback: BLE kapcsolat váratlan megszakadásakor.
 
-        Figyelem: ez a callback potenciálisan nem az asyncio event loop-on
-        hívódik (Bleak platform-függő viselkedés). Ezért csak thread-safe,
-        atomikus műveletek végezhetők itt. A _client nullázása az asyncio
-        oldalon (_write_level exception handler-ében) történik.
+        Bleak nem garantálja, hogy az asyncio event loop szálán hívja ezt,
+        ezért loop.call_soon_threadsafe()-fel delegáljuk az állapotmódosítást.
         """
+        try:
+            loop = asyncio.get_event_loop()
+            loop.call_soon_threadsafe(self._handle_disconnect)
+        except RuntimeError:
+            # Ha nincs elérhető loop, közvetlen hívás (fallback)
+            self._handle_disconnect()
+
+    def _handle_disconnect(self) -> None:
+        """Disconnect állapotmódosítás – az asyncio event loop-on hívandó."""
         logger.warning("BLE Fan kapcsolat megszakadt")
         self.is_connected = False
         self.last_sent = None
@@ -1684,8 +1743,8 @@ class ANTPlusInputHandler:
     def __init__(
         self,
         settings: Dict[str, Any],
-        power_queue: asyncio.Queue,
-        hr_queue: asyncio.Queue,
+        power_queue: asyncio.Queue[float],
+        hr_queue: asyncio.Queue[float],
         loop: asyncio.AbstractEventLoop,
     ) -> None:
         self.settings = settings
@@ -1759,14 +1818,14 @@ class ANTPlusInputHandler:
         self._node = node
         self._devices = []
 
-        if self.ds.get("power_source", "antplus") == "antplus":
+        if self.ds.get("power_source", DataSource.ANTPLUS) == DataSource.ANTPLUS:
             meter = PowerMeter(self._node)
             meter.on_found = lambda: setattr(self, "power_connected", True)
             meter.on_device_data = self._on_data
             meter.on_lost = lambda: setattr(self, "power_connected", False)
             self._devices.append(meter)
 
-        if self.ds.get("hr_source", "antplus") == "antplus" and self.hr_enabled:
+        if self.ds.get("hr_source", DataSource.ANTPLUS) == DataSource.ANTPLUS and self.hr_enabled:
             hr_monitor = HeartRate(self._node)
             hr_monitor.on_found = lambda: setattr(self, "hr_connected", True)
             hr_monitor.on_device_data = self._on_data
@@ -1866,7 +1925,7 @@ class BLEPowerInputHandler:
     RETRY_RESET_SECONDS = 30
 
     def __init__(
-        self, settings: Dict[str, Any], power_queue: asyncio.Queue
+        self, settings: Dict[str, Any], power_queue: asyncio.Queue[float]
     ) -> None:
         ds = settings["datasource"]
         self.device_name: Optional[str] = ds.get("ble_power_device_name")
@@ -2011,7 +2070,7 @@ class BLEHRInputHandler:
     RETRY_RESET_SECONDS = 30
 
     def __init__(
-        self, settings: Dict[str, Any], hr_queue: asyncio.Queue
+        self, settings: Dict[str, Any], hr_queue: asyncio.Queue[float]
     ) -> None:
         ds = settings["datasource"]
         self.device_name: Optional[str] = ds.get("ble_hr_device_name")
@@ -2160,8 +2219,8 @@ class ZwiftUDPInputHandler:
     def __init__(
         self,
         settings: Dict[str, Any],
-        power_queue: asyncio.Queue,
-        hr_queue: asyncio.Queue,
+        power_queue: asyncio.Queue[float],
+        hr_queue: asyncio.Queue[float],
     ) -> None:
         ds = settings["datasource"]
         self.settings = settings
@@ -2170,9 +2229,9 @@ class ZwiftUDPInputHandler:
         self.power_queue = power_queue
         self.hr_queue = hr_queue
 
-        self.process_power: bool = ds.get("power_source") == "zwiftudp"
+        self.process_power: bool = ds.get("power_source") == DataSource.ZWIFTUDP
         hr_enabled = settings.get("heart_rate_zones", {}).get("enabled", False)
-        self.process_hr: bool = ds.get("hr_source") == "zwiftudp" and hr_enabled
+        self.process_hr: bool = ds.get("hr_source") == DataSource.ZWIFTUDP and hr_enabled
 
         self._transport: Any = None
 
@@ -2270,7 +2329,7 @@ class ZwiftUDPInputHandler:
 
 
 async def power_processor_task(
-    raw_power_queue: asyncio.Queue,
+    raw_power_queue: asyncio.Queue[float],
     state: ControllerState,
     zone_event: asyncio.Event,
     power_averager: PowerAverager,
@@ -2297,9 +2356,9 @@ async def power_processor_task(
     max_watt = settings["zone_thresholds"]["max_watt"]
     hr_enabled = settings.get("heart_rate_zones", {}).get("enabled", False)
     zone_mode = (
-        settings["heart_rate_zones"].get("zone_mode", "power_only")
+        settings["heart_rate_zones"].get("zone_mode", ZoneMode.POWER_ONLY)
         if hr_enabled
-        else "power_only"
+        else ZoneMode.POWER_ONLY
     )
 
     logger.info("Power processor korrutin elindítva")
@@ -2328,7 +2387,7 @@ async def power_processor_task(
         avg_power = round(avg_power)
         new_power_zone = zone_for_power(avg_power, power_zones)
 
-        if zone_mode == "higher_wins":
+        if zone_mode == ZoneMode.HIGHER_WINS:
             printer.emit(
                 "power_avg_hw",
                 f"⚡ Átlag teljesítmény: {avg_power} watt | Power zóna: {new_power_zone} | Higher Wins!",
@@ -2359,7 +2418,7 @@ async def power_processor_task(
 
 
 async def hr_processor_task(
-    raw_hr_queue: asyncio.Queue,
+    raw_hr_queue: asyncio.Queue[float],
     state: ControllerState,
     zone_event: asyncio.Event,
     hr_averager: HRAverager,
@@ -2388,9 +2447,9 @@ async def hr_processor_task(
     hrz = settings.get("heart_rate_zones", {})
     hr_enabled = settings.get("heart_rate_zones", {}).get("enabled", False)
     zone_mode = (
-        settings["heart_rate_zones"].get("zone_mode", "power_only")
+        settings["heart_rate_zones"].get("zone_mode", ZoneMode.POWER_ONLY)
         if hr_enabled
-        else "power_only"
+        else ZoneMode.POWER_ONLY
     )
     valid_min_hr: int = hrz.get("valid_min_hr", 30)
     valid_max_hr: int = hrz.get("valid_max_hr", 220)
@@ -2416,7 +2475,7 @@ async def hr_processor_task(
                 state.last_hr_time = now
             continue
 
-        if zone_mode in ("hr_only", "power_only"):
+        if zone_mode in (ZoneMode.HR_ONLY, ZoneMode.POWER_ONLY):
             printer.emit("hr_raw", f"❤ HR: {hr} bpm")
 
         avg_hr = hr_averager.add_sample(hr)
@@ -2430,12 +2489,12 @@ async def hr_processor_task(
         avg_hr = round(avg_hr)
         new_hr_zone = zone_for_hr(avg_hr, hr_zones)
 
-        if zone_mode == "hr_only":
+        if zone_mode == ZoneMode.HR_ONLY:
             printer.emit(
                 "hr_avg",
                 f"❤ Átlag HR: {avg_hr} bpm | HR zóna: {new_hr_zone}",
             )
-        elif zone_mode == "higher_wins":
+        elif zone_mode == ZoneMode.HIGHER_WINS:
             printer.emit(
                 "hr_avg_hw",
                 f"❤ Átlag HR: {avg_hr} bpm | HR zóna: {new_hr_zone} | Higher Wins!",
@@ -2462,7 +2521,7 @@ async def hr_processor_task(
 
 async def zone_controller_task(
     state: ControllerState,
-    zone_queue: asyncio.Queue,
+    zone_queue: asyncio.Queue[int],
     cooldown_ctrl: CooldownController,
     settings: Dict[str, Any],
     zone_event: asyncio.Event,
@@ -2488,9 +2547,9 @@ async def zone_controller_task(
     """
     hr_enabled = settings.get("heart_rate_zones", {}).get("enabled", False)
     zone_mode = (
-        settings["heart_rate_zones"].get("zone_mode", "power_only")
+        settings["heart_rate_zones"].get("zone_mode", ZoneMode.POWER_ONLY)
         if hr_enabled
-        else "power_only"
+        else ZoneMode.POWER_ONLY
     )
     zero_immediate = settings.get("zero_power_immediate", False)
     power_buf = _resolve_buffer_settings(settings, "power")
@@ -2522,9 +2581,9 @@ async def zone_controller_task(
         hr_fresh = last_hr is not None and (now - last_hr) < hr_dropout_timeout
 
         # Zóna kombinálás a zone_mode alapján
-        if zone_mode == "power_only":
+        if zone_mode == ZoneMode.POWER_ONLY:
             final_zone = power_zone if power_fresh else None
-        elif zone_mode == "hr_only":
+        elif zone_mode == ZoneMode.HR_ONLY:
             final_zone = hr_zone if hr_fresh else None
         else:  # higher_wins
             p = power_zone if power_fresh else None
@@ -2557,7 +2616,7 @@ async def zone_controller_task(
 
 async def dropout_checker_task(
     state: ControllerState,
-    zonequeue: asyncio.Queue,
+    zonequeue: asyncio.Queue[int],
     settings: Dict[str, Any],
     poweraverager: PowerAverager,
     hraverager: HRAverager,
@@ -2601,7 +2660,7 @@ async def dropout_checker_task(
                 and (now - state.last_hr_time) < hr_dropout_timeout
             )
 
-            if zone_mode == "power_only":
+            if zone_mode == ZoneMode.POWER_ONLY:
                 stale = not power_fresh
                 elapsed = (
                     now - state.last_power_time
@@ -2609,7 +2668,7 @@ async def dropout_checker_task(
                     else float("inf")
                 )
                 label = "power"
-            elif zone_mode == "hr_only":
+            elif zone_mode == ZoneMode.HR_ONLY:
                 elapsed = (
                     now - state.last_hr_time
                     if state.last_hr_time is not None
@@ -2662,7 +2721,7 @@ async def dropout_checker_task(
                     state.current_hr_zone = None
                 state.current_zone = 0
                 # Fix #28: Cooldown állapot resetelése dropout-kor
-                cooldown_ctrl._reset()
+                cooldown_ctrl.reset()
                 # Fix #40: UI snapshot frissítése – a HUD is lássa a dropout-ot
                 state.ui_snapshot.update(0, state.current_avg_power, state.current_avg_hr)
                 send_dropout = True
@@ -2694,22 +2753,54 @@ class BLECombinedSensor:
 # ============================================================
 
 
-async def _guarded_task(coro: Any, name: str) -> None:
+async def _guarded_task(
+    coro: Any,
+    name: str,
+    *,
+    max_retries: int = 0,
+    retry_delay: float = 5.0,
+    coro_factory: Any = None,
+) -> None:
     """Task wrapper: elkapja és logolja a váratlan kivételeket.
 
     CancelledError-t tovább engedi (normál leálláshoz szükséges).
     Minden más kivételt kritikus szinten logolja, hogy ne tűnjön el csendben.
 
+    Ha max_retries > 0 és coro_factory adott, a task automatikusan újraindul
+    exponenciális backoff-fal (retry_delay * 2^attempt, max 60s).
+
     Args:
-        coro: Az indítandó korrutin.
+        coro: Az indítandó korrutin (első futáshoz).
         name: A task neve (logoláshoz).
+        max_retries: Max újrapróbálkozások száma (0 = nincs retry).
+        retry_delay: Kezdő várakozás másodpercben újraindítás előtt.
+        coro_factory: Paraméter nélküli callable, ami új korrutint ad vissza.
+            Retry-hoz kötelező, mert egy korrutin csak egyszer await-elhető.
     """
-    try:
-        await coro
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:
-        logger.error(f"Task '{name}' váratlanul leállt: {exc}", exc_info=True)
+    attempt = 0
+    current_coro = coro
+    while True:
+        try:
+            await current_coro
+            return  # Normál befejezés
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            attempt += 1
+            if coro_factory is not None and attempt <= max_retries:
+                delay = min(retry_delay * (2 ** (attempt - 1)), 60.0)
+                logger.warning(
+                    f"Task '{name}' hiba ({attempt}/{max_retries}): {exc} "
+                    f"→ újraindítás {delay:.0f}s múlva",
+                    exc_info=True,
+                )
+                await asyncio.sleep(delay)
+                current_coro = coro_factory()
+            else:
+                logger.error(
+                    f"Task '{name}' váratlanul leállt: {exc}", exc_info=True
+                )
+                return
 
 
 # ============================================================
@@ -2754,6 +2845,15 @@ class FanController:
         self._cooldown_ctrl: Optional[CooldownController] = None
         self._ble_sensor_handler: Optional[BLECombinedSensor] = None
 
+    def __repr__(self) -> str:
+        ds = self.settings.get("datasource", {})
+        return (
+            f"FanController(running={self._running}, "
+            f"power_src={ds.get('power_source')}, "
+            f"hr_src={ds.get('hr_source')}, "
+            f"tasks={len(self._tasks)})"
+        )
+
     def print_startup_info(self) -> None:
         """Kiírja az indítási konfigurációs összefoglalót."""
         s = self.settings
@@ -2764,7 +2864,7 @@ class FanController:
         hr_buf = _resolve_buffer_settings(s, "hr")
 
         hr_enabled = hrz.get("enabled", False)
-        zone_mode = hrz.get("zone_mode", "power_only") if hr_enabled else "power_only"
+        zone_mode = hrz.get("zone_mode", ZoneMode.POWER_ONLY) if hr_enabled else ZoneMode.POWER_ONLY
 
         print("-" * 60)
         print(f"  Smart Fan Controller v{__version__}  |  Power+HR → BLE Fan")
@@ -2809,9 +2909,9 @@ class FanController:
             print(f"BLE PIN: {'*' * len(str(s['ble']['pin_code']))}")
 
         # BLE szenzor auto-discovery jelzés
-        if ds.get("power_source") == "ble" and not ds.get("ble_power_device_name"):
+        if ds.get("power_source") == DataSource.BLE and not ds.get("ble_power_device_name"):
             print("BLE Power: (auto-discovery – Cycling Power Service)")
-        if ds.get("hr_source") == "ble" and not ds.get("ble_hr_device_name"):
+        if ds.get("hr_source") == DataSource.BLE and not ds.get("ble_hr_device_name"):
             print("BLE HR: (auto-discovery – Heart Rate Service)")
 
         print(f"Zónamód: {zone_mode}")
@@ -2824,9 +2924,9 @@ class FanController:
         ds = s["datasource"]
         hr_enabled = s.get("heart_rate_zones", {}).get("enabled", False)
         if hr_enabled:
-            zone_mode = s["heart_rate_zones"].get("zone_mode", "power_only")
+            zone_mode = s["heart_rate_zones"].get("zone_mode", ZoneMode.POWER_ONLY)
         else:
-            zone_mode = "power_only"
+            zone_mode = ZoneMode.POWER_ONLY
 
         # --- Zóna határok kiszámítása ---
         power_zones = calculate_power_zones(
@@ -2848,9 +2948,9 @@ class FanController:
         )
 
         # --- Komponensek létrehozása ---
-        raw_power_queue: asyncio.Queue = asyncio.Queue(maxsize=100)
-        raw_hr_queue: asyncio.Queue = asyncio.Queue(maxsize=100)
-        zone_cmd_queue: asyncio.Queue = asyncio.Queue(maxsize=1)
+        raw_power_queue: asyncio.Queue[float] = asyncio.Queue(maxsize=100)
+        raw_hr_queue: asyncio.Queue[float] = asyncio.Queue(maxsize=100)
+        zone_cmd_queue: asyncio.Queue[int] = asyncio.Queue(maxsize=1)
         zone_event = asyncio.Event()
 
         state = ControllerState()
@@ -2877,31 +2977,49 @@ class FanController:
         self._ble_fan = ble_fan
         self._tasks.append(
             asyncio.create_task(
-                _guarded_task(ble_fan.run(zone_cmd_queue), "BLEFanOutput"),
+                _guarded_task(
+                    ble_fan.run(zone_cmd_queue),
+                    "BLEFanOutput",
+                    max_retries=3,
+                    retry_delay=5.0,
+                    coro_factory=lambda: ble_fan.run(zone_cmd_queue),
+                ),
                 name="BLEFanOutput",
             )
         )
 
         # --- Bemeneti adatforrások ---
-        power_source = ds.get("power_source", "antplus")
-        hr_source = ds.get("hr_source", "antplus")
+        power_source = ds.get("power_source", DataSource.ANTPLUS)
+        hr_source = ds.get("hr_source", DataSource.ANTPLUS)
 
-        if power_source == "ble":
+        if power_source == DataSource.BLE:
             ble_power = BLEPowerInputHandler(s, raw_power_queue)
             self._ble_power = ble_power
             self._tasks.append(
                 asyncio.create_task(
-                    _guarded_task(ble_power.run(), "BLEPowerInput"),
+                    _guarded_task(
+                        ble_power.run(),
+                        "BLEPowerInput",
+                        max_retries=3,
+                        retry_delay=5.0,
+                        coro_factory=lambda: ble_power.run(),
+                    ),
                     name="BLEPowerInput",
                 )
             )
 
-        if hr_source == "ble" and hr_enabled:
+        if hr_source == DataSource.BLE and hr_enabled:
             ble_hr = BLEHRInputHandler(s, raw_hr_queue)
             self._ble_hr = ble_hr
             self._tasks.append(
                 asyncio.create_task(
-                    _guarded_task(ble_hr.run(), "BLEHRInput"),
+                    _guarded_task(
+                        ble_hr.run(),
+                        "BLEHRInput",
+                        max_retries=3,
+                        retry_delay=5.0,
+                        coro_factory=lambda: ble_hr.run(),
+                    ),
                     name="BLEHRInput",
                 )
             )
@@ -2910,8 +3028,8 @@ class FanController:
             power_handler=self._ble_power, hr_handler=self._ble_hr
         )
 
-        needs_zwift = (power_source == "zwiftudp") or (
-            hr_source == "zwiftudp" and hr_enabled
+        needs_zwift = (power_source == DataSource.ZWIFTUDP) or (
+            hr_source == DataSource.ZWIFTUDP and hr_enabled
         )
         if needs_zwift:
             # Subprocess indítása – platform-specifikus kezelés
@@ -2945,33 +3063,32 @@ class FanController:
 
                 msg = f"zwift_api_polling.py elindítva (PID: {self._zwift_proc.pid})"
                 logger.info(msg)
-                print(f"[INFO] {msg}")
 
             except FileNotFoundError as exc:
-                msg = f"[HIBA] zwift_api_polling.py nem található: {exc}"
-                print(msg)
-                logger.error(msg)
+                logger.error(f"zwift_api_polling.py nem található: {exc}")
             except OSError as exc:
-                msg = f"[HIBA] zwift_api_polling.py indítása sikertelen: {exc}"
-                print(msg)
-                logger.error(msg)
+                logger.error(f"zwift_api_polling.py indítása sikertelen: {exc}")
             except Exception as exc:
-                msg = f"[HIBA] Váratlan hiba zwift_api_polling.py indításakor: {exc}"
-                print(msg)
-                logger.error(msg)
+                logger.error(f"Váratlan hiba zwift_api_polling.py indításakor: {exc}")
 
             # UDP handler mindig létrejön, függetlenül a subprocess sikerétől
             zwiftudp = ZwiftUDPInputHandler(s, raw_power_queue, raw_hr_queue)
             self._zwift_udp = zwiftudp
             self._tasks.append(
                 asyncio.create_task(
-                    _guarded_task(zwiftudp.run(), "ZwiftUDPInput"),
+                    _guarded_task(
+                        zwiftudp.run(),
+                        "ZwiftUDPInput",
+                        max_retries=3,
+                        retry_delay=5.0,
+                        coro_factory=lambda: zwiftudp.run(),
+                    ),
                     name="ZwiftUDPInput",
                 )
             )
 
-        needs_antplus = (power_source == "antplus") or (
-            hr_source == "antplus" and hr_enabled
+        needs_antplus = (power_source == DataSource.ANTPLUS) or (
+            hr_source == DataSource.ANTPLUS and hr_enabled
         )
         if needs_antplus:
             if _ANTPLUS_AVAILABLE:
@@ -3109,9 +3226,6 @@ class FanController:
             if self._zwift_proc.poll() is None:  # csak ha még fut
                 logger.info(
                     f"zwift_api_polling.py leállítása (PID: {self._zwift_proc.pid})..."
-                )
-                print(
-                    f"[INFO] zwift_api_polling.py leállítása (PID: {self._zwift_proc.pid})..."
                 )
                 try:
                     self._zwift_proc.terminate()
@@ -3683,8 +3797,8 @@ class HUDWindow:
 
             # BLE szenzorok
             ds = self._ctrl.settings["datasource"]
-            power_ble = ds.get("power_source") == "ble"
-            hr_ble = ds.get("hr_source") == "ble"
+            power_ble = ds.get("power_source") == DataSource.BLE
+            hr_ble = ds.get("hr_source") == DataSource.BLE
 
             if not power_ble and not hr_ble:
                 self._lbl_ble_sens.config(text="– – –", fg=self.TEXT_DIM)
@@ -3713,8 +3827,8 @@ class HUDWindow:
                     self._lbl_ble_sens.config(text="STANDBY", fg=self.LCARS_GOLD)
 
             # ANT+
-            power_ant = ds.get("power_source") == "antplus"
-            hr_ant = ds.get("hr_source") == "antplus"
+            power_ant = ds.get("power_source") == DataSource.ANTPLUS
+            hr_ant = ds.get("hr_source") == DataSource.ANTPLUS
             ant = getattr(self._ctrl, "_antplus_handler", None)
 
             if not power_ant and not hr_ant:
@@ -3743,8 +3857,8 @@ class HUDWindow:
 
             # Zwift
             zwift = getattr(self._ctrl, "_zwift_udp", None)
-            power_zwift = ds.get("power_source") == "zwiftudp"
-            hr_zwift = ds.get("hr_source") == "zwiftudp"
+            power_zwift = ds.get("power_source") == DataSource.ZWIFTUDP
+            hr_zwift = ds.get("hr_source") == DataSource.ZWIFTUDP
 
             if zwift is not None and (power_zwift or hr_zwift):
                 now = time.monotonic()
@@ -3861,6 +3975,8 @@ def main() -> None:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     cleaned_up = False
+    # Shutdown event: az asyncio loop-ot megbízhatóan leállítja
+    shutdown_event = asyncio.Event()
     # Mutable konténer: a signal handler-nek kell a HUD referencia,
     # ami később jön létre. Lista azért, hogy nonlocal nélkül módosítható legyen.
     hud_ref: list = [None]
@@ -3884,7 +4000,7 @@ def main() -> None:
             except Exception:
                 pass
         try:
-            loop.call_soon_threadsafe(loop.stop)
+            loop.call_soon_threadsafe(shutdown_event.set)
         except Exception:
             pass
 
@@ -3898,21 +4014,42 @@ def main() -> None:
 
     atexit.register(cleanup)
 
+    loop_ready = threading.Event()
+
+    async def _run_until_shutdown() -> None:
+        """Controller futtatása shutdown_event-ig."""
+        controller_task = asyncio.create_task(controller.run())
+        shutdown_task = asyncio.create_task(shutdown_event.wait())
+        done, pending = await asyncio.wait(
+            [controller_task, shutdown_task],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for t in pending:
+            t.cancel()
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
+
     def run_asyncio() -> None:
         asyncio.set_event_loop(loop)
+        # Jelezzük, hogy az event loop fut és kész feladatokat fogadni
+        loop.call_soon(loop_ready.set)
         try:
-            loop.run_until_complete(controller.run())
+            loop.run_until_complete(_run_until_shutdown())
         except Exception as exc:
             # Fix #22: teljes traceback logolása
             logger.error(f"AsyncioThread hiba: {exc}", exc_info=True)
+        finally:
+            loop_ready.set()  # Ha hiba miatt kilép, ne blokkoljon örökre
 
     asyncio_thread = threading.Thread(
         target=run_asyncio, daemon=True, name="AsyncioThread"
     )
     asyncio_thread.start()
 
-    # Rövid várakozás: az asyncio loop és a BLE kapcsolat inicializálásához
-    time.sleep(0.5)
+    # Megvárjuk, amíg az asyncio event loop ténylegesen elindul (max 5s)
+    loop_ready.wait(timeout=5.0)
 
     # Fix #20: tkinter opcionális – headless módban HUD nélkül fut
     if _TKINTER_AVAILABLE:
@@ -3927,15 +4064,14 @@ def main() -> None:
             hud.close()
             cleanup()
 
-            loop.call_soon_threadsafe(lambda: None)
-            time.sleep(0.1)
-
+            # Shutdown event jelzése → asyncio loop megbízhatóan leáll
             try:
-                loop.call_soon_threadsafe(loop.stop)
+                loop.call_soon_threadsafe(shutdown_event.set)
             except Exception:
                 pass
 
             asyncio_thread.join(timeout=3.0)
+            loop.close()
             print("\nProgram leállítva.")
     else:
         logger.warning("tkinter nem elérhető, HUD nélkül fut")
@@ -3947,10 +4083,11 @@ def main() -> None:
         finally:
             cleanup()
             try:
-                loop.call_soon_threadsafe(loop.stop)
+                loop.call_soon_threadsafe(shutdown_event.set)
             except Exception:
                 pass
             asyncio_thread.join(timeout=3.0)
+            loop.close()
             print("\nProgram leállítva.")
 
 
