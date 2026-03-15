@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
+
 """
 swift_fan_controller_new_v2.py
 
@@ -40,12 +41,12 @@ import time
 import atexit
 import subprocess
 import sys
-import os 
+import os
 
 from collections import deque
 from typing import Any, Dict, Optional, Tuple
 from typing import Optional
-from tkinter import ttk 
+from tkinter import ttk
 
 Node: Any = None
 ANTPLUS_NETWORK_KEY: Any = None
@@ -65,12 +66,14 @@ try:
     from openant.devices import ANTPLUS_NETWORK_KEY
     from openant.devices.power_meter import PowerMeter, PowerData
     from openant.devices.heart_rate import HeartRate, HeartRateData
+
     _ANTPLUS_AVAILABLE = True
 except ImportError:
     pass
 
 try:
     from bleak import BleakClient, BleakScanner
+
     _BLEAK_AVAILABLE = True
 except ImportError:
     pass
@@ -154,7 +157,6 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
 
 
 def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
-
     """Betölti és validálja a JSON beállítási fájlt.
 
     Alapértelmezett értékekből indul ki (DEFAULT_SETTINGS), majd felülírja
@@ -175,7 +177,9 @@ def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
         with open(settings_file, "r", encoding="utf-8") as f:
             loaded = json.load(f)
     except FileNotFoundError:
-        print(f"⚠ '{settings_file}' nem található, alapértelmezett beállítások használata.")
+        print(
+            f"⚠ '{settings_file}' nem található, alapértelmezett beállítások használata."
+        )
         _save_default_settings(settings_file, settings)
         return settings
     except (json.JSONDecodeError, OSError) as exc:
@@ -237,8 +241,12 @@ def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
             if key in ds and (ds[key] is None or isinstance(ds[key], str)):
                 settings["datasource"][key] = ds[key]
 
-        for key in ("ble_power_scan_timeout", "ble_power_reconnect_interval",
-                    "ble_hr_scan_timeout", "ble_hr_reconnect_interval"):
+        for key in (
+            "ble_power_scan_timeout",
+            "ble_power_reconnect_interval",
+            "ble_hr_scan_timeout",
+            "ble_hr_reconnect_interval",
+        ):
             _load_int(ds, settings["datasource"], key, 1, 60)
 
         for key in ("ble_power_max_retries", "ble_hr_max_retries"):
@@ -249,9 +257,9 @@ def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
         _load_int(ds, settings["datasource"], "zwift_udp_port", 1024, 65535)
 
         for prefix in ("BLE", "ANT", "zwiftUDP"):
-            _load_int(ds, settings["datasource"], f"{prefix}_buffer_seconds",  1, 60)
+            _load_int(ds, settings["datasource"], f"{prefix}_buffer_seconds", 1, 60)
             _load_int(ds, settings["datasource"], f"{prefix}_minimum_samples", 1, 100)
-            _load_int(ds, settings["datasource"], f"{prefix}_buffer_rate_hz",  1, 60)
+            _load_int(ds, settings["datasource"], f"{prefix}_buffer_rate_hz", 1, 60)
             _load_int(ds, settings["datasource"], f"{prefix}_dropout_timeout", 1, 300)
 
     # --- Szívfrekvencia zóna beállítások ---
@@ -273,9 +281,21 @@ def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
     try:
         ds_cfg = settings["datasource"]
         for prefix in ("BLE", "ANT", "zwiftUDP"):
-            bs  = int(ds_cfg.get(f"{prefix}_buffer_seconds",  settings.get("buffer_seconds",  3)))
-            ms  = int(ds_cfg.get(f"{prefix}_minimum_samples", settings.get("minimum_samples", 6)))
-            brz = int(ds_cfg.get(f"{prefix}_buffer_rate_hz",  settings.get("buffer_rate_hz",  4)))
+            bs = int(
+                ds_cfg.get(
+                    f"{prefix}_buffer_seconds", settings.get("buffer_seconds", 3)
+                )
+            )
+            ms = int(
+                ds_cfg.get(
+                    f"{prefix}_minimum_samples", settings.get("minimum_samples", 6)
+                )
+            )
+            brz = int(
+                ds_cfg.get(
+                    f"{prefix}_buffer_rate_hz", settings.get("buffer_rate_hz", 4)
+                )
+            )
             if bs > 0 and brz > 0:
                 max_samples = bs * brz
                 if ms > max_samples:
@@ -335,7 +355,7 @@ def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
         z2p = hrz.get("z2_max_percent")
         if isinstance(z1p, int) and isinstance(z2p, int):
             if z1p >= z2p:
-                low  = min(z1p, z2p)
+                low = min(z1p, z2p)
                 high = max(z1p, z2p)
                 if low == high:
                     high = min(100, low + 1)
@@ -345,7 +365,7 @@ def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
                 )
                 hrz["z1_max_percent"] = low
                 hrz["z2_max_percent"] = high
-        max_hr     = hrz.get("max_hr")
+        max_hr = hrz.get("max_hr")
         resting_hr = hrz.get("resting_hr")
         if isinstance(max_hr, int) and isinstance(resting_hr, int):
             if resting_hr >= max_hr:
@@ -369,8 +389,12 @@ def load_settings(settings_file: str = "settings.json") -> Dict[str, Any]:
                     f"⚠ valid_min_hr ({valid_min}) >= valid_max_hr ({valid_max}), "
                     f"alapértelmezés visszaállítva."
                 )
-                hrz["valid_min_hr"] = DEFAULT_SETTINGS["heart_rate_zones"]["valid_min_hr"]
-                hrz["valid_max_hr"] = DEFAULT_SETTINGS["heart_rate_zones"]["valid_max_hr"]
+                hrz["valid_min_hr"] = DEFAULT_SETTINGS["heart_rate_zones"][
+                    "valid_min_hr"
+                ]
+                hrz["valid_max_hr"] = DEFAULT_SETTINGS["heart_rate_zones"][
+                    "valid_max_hr"
+                ]
     except Exception as exc:
         print(f"⚠ valid_hr kereszt-validáció sikertelen: {exc}")
 
@@ -410,13 +434,13 @@ def _save_default_settings(path: str, settings: Dict[str, Any]) -> None:
     except OSError as exc:
         print(f"✗ Nem sikerült létrehozni a '{path}' fájlt: {exc}")
 
+
 # ============================================================
 # TISZTA FÜGGVÉNYEK – ZÓNA SZÁMÍTÁS
 # ============================================================
 
-def _resolve_buffer_settings(
-    settings: Dict[str, Any], role: str
-) -> Dict[str, Any]:
+
+def _resolve_buffer_settings(settings: Dict[str, Any], role: str) -> Dict[str, Any]:
     """
     Visszaadja a megfelelő buffer/dropout paramétereket a megadott szerephez.
     A role ("power" vagy "hr") alapján meghatározza az aktív forrást,
@@ -441,15 +465,20 @@ def _resolve_buffer_settings(
         prefix = "zwiftUDP"
 
     return {
-        "buffer_seconds":  ds.get(f"{prefix}_buffer_seconds",
-                            settings.get("buffer_seconds",  3)),
-        "minimum_samples": ds.get(f"{prefix}_minimum_samples",
-                            settings.get("minimum_samples", 6)),
-        "buffer_rate_hz":  ds.get(f"{prefix}_buffer_rate_hz",
-                            settings.get("buffer_rate_hz",  4)),
-        "dropout_timeout": ds.get(f"{prefix}_dropout_timeout",
-                            settings.get("dropout_timeout", 5)),
+        "buffer_seconds": ds.get(
+            f"{prefix}_buffer_seconds", settings.get("buffer_seconds", 3)
+        ),
+        "minimum_samples": ds.get(
+            f"{prefix}_minimum_samples", settings.get("minimum_samples", 6)
+        ),
+        "buffer_rate_hz": ds.get(
+            f"{prefix}_buffer_rate_hz", settings.get("buffer_rate_hz", 4)
+        ),
+        "dropout_timeout": ds.get(
+            f"{prefix}_dropout_timeout", settings.get("dropout_timeout", 5)
+        ),
     }
+
 
 def calculate_power_zones(
     ftp: int,
@@ -504,6 +533,7 @@ def calculate_hr_zones(
         "z2_max": int(max_hr * z2_pct / 100),
     }
 
+
 def zone_for_power(power: float, zones: Dict[int, Tuple[int, int]]) -> int:
     if power <= 0:
         return 0
@@ -516,6 +546,7 @@ def zone_for_power(power: float, zones: Dict[int, Tuple[int, int]]) -> int:
         if lo <= power <= hi:
             return zone_num
     return 3  # csak max_watt felett érthető el
+
 
 def zone_for_hr(hr: int, hr_zones: Dict[str, int]) -> int:
     """Meghatározza a HR zónát (0–3) az adott bpm értékhez.
@@ -559,6 +590,7 @@ def is_valid_power(power: Any, min_watt: int, max_watt: int) -> bool:
         return False
     return True
 
+
 def is_valid_hr(hr: Any, valid_min_hr: int, valid_max_hr: int) -> bool:
     """Ellenőrzi, hogy az érték érvényes szívfrekvencia adat-e.
 
@@ -580,9 +612,11 @@ def is_valid_hr(hr: Any, valid_min_hr: int, valid_max_hr: int) -> bool:
         return False
     return True
 
+
 # ============================================================
 # TISZTA FÜGGVÉNYEK – ÁTLAGSZÁMÍTÁS
 # ============================================================
+
 
 def compute_average(samples: deque[float]) -> float | None:
     """Kiszámítja a minták számtani átlagát.
@@ -601,6 +635,7 @@ def compute_average(samples: deque[float]) -> float | None:
 # ============================================================
 # TISZTA FÜGGVÉNYEK – ZÓNA LOGIKA (higher_wins, zone_mode)
 # ============================================================
+
 
 def higher_wins(zone_a: int, zone_b: int) -> int:
     """A két zóna közül a nagyobbat adja vissza.
@@ -650,6 +685,7 @@ def apply_zone_mode(
 # ============================================================
 # COOLDOWN LOGIKA
 # ============================================================
+
 
 class CooldownController:
     """Cooldown logika kezelője zóna csökkentés esetén.
@@ -731,7 +767,9 @@ class CooldownController:
         self.pending_zone = new_zone
         self.can_halve = True
         self.can_double = False
-        print(f"🕐 Cooldown indítva: {self.cooldown_seconds}s várakozás (cél: {new_zone})")
+        print(
+            f"🕐 Cooldown indítva: {self.cooldown_seconds}s várakozás (cél: {new_zone})"
+        )
         # Nagy zónaesés esetén azonnali felezés
         if new_zone == 0 or (current_zone - new_zone >= 2):
             self._halve(now)
@@ -770,16 +808,24 @@ class CooldownController:
             if old_pending is not None and new_zone > old_pending and self.can_double:
                 self._double(now)
                 remaining = self.cooldown_seconds - (now - self.start_time)
-                print(f"🕐 Cooldown aktív: még {remaining:.0f}s (várakozó zóna: {new_zone})")
+                print(
+                    f"🕐 Cooldown aktív: még {remaining:.0f}s (várakozó zóna: {new_zone})"
+                )
             elif (new_zone == 0 or (current_zone - new_zone >= 2)) and self.can_halve:
                 self._halve(now)
                 remaining = self.cooldown_seconds - (now - self.start_time)
-                print(f"🕐 Cooldown aktív: még {remaining:.0f}s (várakozó zóna: {new_zone})")
+                print(
+                    f"🕐 Cooldown aktív: még {remaining:.0f}s (várakozó zóna: {new_zone})"
+                )
             else:
-                print(f"🕐 Cooldown aktív: még {remaining:.0f}s (várakozó zóna: {new_zone})")
+                print(
+                    f"🕐 Cooldown aktív: még {remaining:.0f}s (várakozó zóna: {new_zone})"
+                )
             self._last_print = now
         elif now - self._last_print >= self.PRINT_INTERVAL:
-            print(f"🕐 Cooldown aktív: még {remaining:.0f}s (várakozó: {self.pending_zone})")
+            print(
+                f"🕐 Cooldown aktív: még {remaining:.0f}s (várakozó: {self.pending_zone})"
+            )
             self._last_print = now
 
         return None
@@ -814,6 +860,7 @@ class CooldownController:
 # POWER ÁTLAGOLÁS
 # ============================================================
 
+
 class PowerAverager:
     """Gördülő átlagot számít a bejövő teljesítmény mintákból.
 
@@ -828,8 +875,10 @@ class PowerAverager:
         effective_minimum: Ténylegesen alkalmazott minimum (max: buffersize // 2).
         buffersize: A buffer maximális mérete.
     """
-    def __init__(self, buffer_seconds: int, minimum_samples: int,
-        buffer_rate_hz: int = 4) -> None:
+
+    def __init__(
+        self, buffer_seconds: int, minimum_samples: int, buffer_rate_hz: int = 4
+    ) -> None:
         rate = max(1, int(buffer_rate_hz))
         self.buffersize = max(1, int(buffer_seconds) * rate)
         self.buffer: deque[float] = deque(maxlen=self.buffersize)
@@ -842,7 +891,8 @@ class PowerAverager:
         if len(self.buffer) < self.effective_minimum:
             logging.debug(
                 "Power adatok gyűjtése: %d/%d (effective min)",
-                len(self.buffer), self.effective_minimum,
+                len(self.buffer),
+                self.effective_minimum,
             )
             return None
         return compute_average(self.buffer)
@@ -855,6 +905,7 @@ class PowerAverager:
 # ============================================================
 # HR ÁTLAGOLÁS
 # ============================================================
+
 
 class HRAverager:
     """Gördülő átlagot számít a bejövő HR mintákból.
@@ -870,8 +921,10 @@ class HRAverager:
         effective_minimum: Ténylegesen alkalmazott minimum (max: buffersize // 2).
         buffersize: A buffer maximális mérete.
     """
-    def __init__(self, buffer_seconds: int, minimum_samples: int,
-        buffer_rate_hz: int = 4) -> None:
+
+    def __init__(
+        self, buffer_seconds: int, minimum_samples: int, buffer_rate_hz: int = 4
+    ) -> None:
         rate = max(1, int(buffer_rate_hz))
         self.buffersize = max(1, int(buffer_seconds) * rate)
         self.buffer: deque[float] = deque(maxlen=self.buffersize)
@@ -885,7 +938,8 @@ class HRAverager:
         if len(self.buffer) < self.effective_minimum:
             logging.debug(
                 "HR adatok gyűjtése: %d/%d (effective min)",
-                len(self.buffer), self.effective_minimum,
+                len(self.buffer),
+                self.effective_minimum,
             )
             return None
         return compute_average(self.buffer)
@@ -894,9 +948,11 @@ class HRAverager:
         """Törli az összes pufferelt mintát."""
         self.buffer.clear()
 
+
 # ============================================================
 # KONZOLOS KIÍRÁS (throttle-olt)
 # ============================================================
+
 
 class ConsolePrinter:
     """Throttle-olt konzol kiírás – ugyanaz az üzenet nem jelenhet meg túl sűrűn.
@@ -935,6 +991,7 @@ class ConsolePrinter:
 # MEGOSZTOTT ÁLLAPOT
 # ============================================================
 
+
 class ControllerState:
     """A vezérlő megosztott állapota, asyncio.Lock-kal védve.
 
@@ -968,6 +1025,7 @@ class ControllerState:
 # ZÓNA ELKÜLDÉSE (helper)
 # ============================================================
 
+
 async def send_zone(zone: int, zone_queue: asyncio.Queue[int]) -> None:
     """Zóna parancsot küld a BLE fan kimenet queue-ba.
 
@@ -991,6 +1049,7 @@ async def send_zone(zone: int, zone_queue: asyncio.Queue[int]) -> None:
 # ============================================================
 # BLE VENTILÁTOR KIMENET VEZÉRLŐ
 # ============================================================
+
 
 class BLEFanOutputController:
     """BLE alapú ventilátor kimenet vezérlő (LEVEL:N parancsok küldése).
@@ -1137,7 +1196,7 @@ class BLEFanOutputController:
 
         try:
             auth_event = asyncio.Event()
-            auth_result: list[str] = [""] 
+            auth_result: list[str] = [""]
 
             def _notify_cb(sender: Any, data: bytes) -> None:
                 auth_result[0] = data.decode("utf-8", errors="replace").strip()
@@ -1163,7 +1222,9 @@ class BLEFanOutputController:
                         timeout=self.command_timeout,
                     )
                 except asyncio.TimeoutError:
-                    logger.warning("BLE AUTH válasz timeout - folytatás autentikáció nélkül")
+                    logger.warning(
+                        "BLE AUTH válasz timeout - folytatás autentikáció nélkül"
+                    )
                     return True
 
                 resp: str = auth_result[0]
@@ -1211,7 +1272,9 @@ class BLEFanOutputController:
             zone: Ventilátor zóna szintje (0–3).
         """
         if self._auth_failed:
-            logger.error("BLE Fan: AUTH hiba, parancs elutasítva! Javítsd a pin_code-ot.")
+            logger.error(
+                "BLE Fan: AUTH hiba, parancs elutasítva! Javítsd a pin_code-ot."
+            )
             return
 
         if self.last_sent == zone and self.is_connected:
@@ -1308,9 +1371,11 @@ class BLEFanOutputController:
                 self.is_connected = False
                 self._client = None
 
+
 # ============================================================
 # ANT+ BEMENŐ ADATKEZELÉS
 # ============================================================
+
 
 class ANTPlusInputHandler:
     """ANT+ power és HR adatforrás kezelője saját daemon szálban.
@@ -1345,10 +1410,10 @@ class ANTPlusInputHandler:
         self._running = threading.Event()
         self._node: Optional[Any] = None
         self._devices: list[Any] = []
-        self.power_lastdata: float = 0.0   # ← ÚJ
-        self.hr_lastdata: float = 0.0      # ← ÚJ
+        self.power_lastdata: float = 0.0  # ← ÚJ
+        self.hr_lastdata: float = 0.0  # ← ÚJ
         self.power_connected: bool = False
-        self.hr_connected:    bool = False
+        self.hr_connected: bool = False
 
     def start(self) -> threading.Thread:
         """Elindítja az ANT+ daemon szálat.
@@ -1414,9 +1479,10 @@ class ANTPlusInputHandler:
             hr_monitor = HeartRate(self._node)
             hr_monitor.on_found = lambda: setattr(self, "hr_connected", True)
             hr_monitor.on_device_data = self._on_data
-            hr_monitor.on_lost = lambda: setattr(self, "hr_connected", False)  # ← új sor
+            hr_monitor.on_lost = lambda: setattr(
+                self, "hr_connected", False
+            )  # ← új sor
             self._devices.append(hr_monitor)
-            
 
     def _stop_node(self) -> None:
         """Leállítja és felszabadítja az ANT+ node-ot."""
@@ -1486,6 +1552,7 @@ class ANTPlusInputHandler:
 # BLE POWER BEMENŐ ADATKEZELÉS
 # ============================================================
 
+
 class BLEPowerInputHandler:
     """BLE Cycling Power Service (UUID: 0x1818) fogadó.
 
@@ -1503,7 +1570,9 @@ class BLEPowerInputHandler:
     CYCLING_POWER_MEASUREMENT_UUID = "00002a63-0000-1000-8000-00805f9b34fb"
     RETRY_RESET_SECONDS = 30
 
-    def __init__(self, settings: Dict[str, Any], power_queue: asyncio.Queue[float]) -> None:
+    def __init__(
+        self, settings: Dict[str, Any], power_queue: asyncio.Queue[float]
+    ) -> None:
         ds = settings["datasource"]
         self.device_name: Optional[str] = ds.get("ble_power_device_name")
         self.scan_timeout: int = ds.get("ble_power_scan_timeout", 10)
@@ -1512,7 +1581,7 @@ class BLEPowerInputHandler:
         self.power_queue = power_queue
         self.is_connected = False
         self._retry_count = 0
-        
+
         self.power_lastdata = 0.0
 
     async def run(self) -> None:
@@ -1521,7 +1590,9 @@ class BLEPowerInputHandler:
             logger.error("BLE Power: bleak könyvtár nem elérhető!")
             return
         if not self.device_name:
-            logger.warning("BLE Power: nincs 'ble_power_device_name' megadva, leállítva.")
+            logger.warning(
+                "BLE Power: nincs 'ble_power_device_name' megadva, leállítva."
+            )
             return
 
         loop = asyncio.get_event_loop()
@@ -1602,6 +1673,7 @@ class BLEPowerInputHandler:
 # BLE HR BEMENŐ ADATKEZELÉS
 # ============================================================
 
+
 class BLEHRInputHandler:
     """BLE Heart Rate Service (UUID: 0x180D) fogadó.
 
@@ -1619,7 +1691,9 @@ class BLEHRInputHandler:
     HEART_RATE_MEASUREMENT_UUID = "00002a37-0000-1000-8000-00805f9b34fb"
     RETRY_RESET_SECONDS = 30
 
-    def __init__(self, settings: Dict[str, Any], hr_queue: asyncio.Queue[float]) -> None:
+    def __init__(
+        self, settings: Dict[str, Any], hr_queue: asyncio.Queue[float]
+    ) -> None:
         ds = settings["datasource"]
         self.device_name: Optional[str] = ds.get("ble_hr_device_name")
         self.scan_timeout: int = ds.get("ble_hr_scan_timeout", 10)
@@ -1706,8 +1780,11 @@ class BLEHRInputHandler:
                         self.hr_queue.put(hr), loop
                     )
                     future.add_done_callback(
-                        lambda f: logger.debug(f"BLE HR queue put hiba: {f.exception()}")
-                        if not f.cancelled() and f.exception() else None
+                        lambda f: (
+                            logger.debug(f"BLE HR queue put hiba: {f.exception()}")
+                            if not f.cancelled() and f.exception()
+                            else None
+                        )
                     )
                 except Exception as exc:
                     logger.warning(f"BLE HR notification feldolgozási hiba: {exc}")
@@ -1821,7 +1898,11 @@ class ZwiftUDPInputHandler:
 
         if self.process_power and "power" in data:
             p = data["power"]
-            if isinstance(p, (int, float)) and not isinstance(p, bool) and 0 <= p <= 2500:
+            if (
+                isinstance(p, (int, float))
+                and not isinstance(p, bool)
+                and 0 <= p <= 2500
+            ):
                 try:
                     self.power_queue.put_nowait(int(p))
                     valid_any = True
@@ -1837,7 +1918,7 @@ class ZwiftUDPInputHandler:
 
             h = data["heartrate"]
             # feltételezem, hogy van ilyen függvényed:
-            #from .utils import is_valid_hr  # ha máshol van, igazítsd
+            # from .utils import is_valid_hr  # ha máshol van, igazítsd
             if is_valid_hr(h, valid_min_hr, valid_max_hr):
                 try:
                     self.hr_queue.put_nowait(int(h))
@@ -1851,9 +1932,11 @@ class ZwiftUDPInputHandler:
         if valid_any:
             self.last_packet_time = time.monotonic()
 
+
 # ============================================================
 # POWER FELDOLGOZÓ KORRUTIN
 # ============================================================
+
 
 async def power_processor_task(
     raw_power_queue: asyncio.Queue[float],
@@ -1884,7 +1967,8 @@ async def power_processor_task(
     hr_enabled = settings.get("heart_rate_zones", {}).get("enabled", False)
     zone_mode = (
         settings["heart_rate_zones"].get("zone_mode", "power_only")
-        if hr_enabled else "power_only"
+        if hr_enabled
+        else "power_only"
     )
 
     logger.info("Power processor korrutin elindítva")
@@ -1932,6 +2016,7 @@ async def power_processor_task(
 # HR FELDOLGOZÓ KORRUTIN
 # ============================================================
 
+
 async def hr_processor_task(
     raw_hr_queue: asyncio.Queue[float],
     state: ControllerState,
@@ -1941,7 +2026,6 @@ async def hr_processor_task(
     settings: Dict[str, Any],
     hr_zones: Dict[str, int],
 ) -> None:
-    
     """HR adatok feldolgozása – validálás, átlagolás, állapot frissítés.
 
     Olvassa a raw_hr_queue-t, validálja a bpm értékeket, gördülő átlagot
@@ -1964,7 +2048,8 @@ async def hr_processor_task(
     hr_enabled = settings.get("heart_rate_zones", {}).get("enabled", False)
     zone_mode = (
         settings["heart_rate_zones"].get("zone_mode", "power_only")
-        if hr_enabled else "power_only"
+        if hr_enabled
+        else "power_only"
     )
     valid_min_hr: int = hrz.get("valid_min_hr", 30)
     valid_max_hr: int = hrz.get("valid_max_hr", 220)
@@ -1996,11 +2081,10 @@ async def hr_processor_task(
         avg_hr = hr_averager.add_sample(hr)
 
         async with state.lock:
-            state.last_hr_time = now   # ← mindig frissítjük, minta érkezett
+            state.last_hr_time = now  # ← mindig frissítjük, minta érkezett
 
         if avg_hr is None:
             continue
-
 
         avg_hr = round(avg_hr)
         new_hr_zone = zone_for_hr(avg_hr, hr_zones)
@@ -2028,6 +2112,7 @@ async def hr_processor_task(
 # ZÓNA VEZÉRLŐ KORRUTIN
 # ============================================================
 
+
 async def zone_controller_task(
     state: ControllerState,
     zone_queue: asyncio.Queue[int],
@@ -2053,13 +2138,14 @@ async def zone_controller_task(
     hr_enabled = settings.get("heart_rate_zones", {}).get("enabled", False)
     zone_mode = (
         settings["heart_rate_zones"].get("zone_mode", "power_only")
-        if hr_enabled else "power_only"
+        if hr_enabled
+        else "power_only"
     )
     zero_immediate = settings.get("zero_power_immediate", False)
     power_buf = _resolve_buffer_settings(settings, "power")
-    hr_buf    = _resolve_buffer_settings(settings, "hr")
+    hr_buf = _resolve_buffer_settings(settings, "hr")
     power_dropout_timeout = power_buf["dropout_timeout"]
-    hr_dropout_timeout    = hr_buf["dropout_timeout"]
+    hr_dropout_timeout = hr_buf["dropout_timeout"]
 
     logger.info("Zóna vezérlő korrutin elindítva")
 
@@ -2107,6 +2193,7 @@ async def zone_controller_task(
 # DROPOUT ELLENŐRZŐ KORRUTIN
 # ============================================================
 
+
 async def dropout_checker_task(
     state: ControllerState,
     zonequeue: asyncio.Queue[int],
@@ -2132,19 +2219,24 @@ async def dropout_checker_task(
                 continue
 
             power_fresh = (now - state.last_power_time) < power_dropout_timeout
-            hr_fresh    = (state.last_hr_time is not None and
-                        (now - state.last_hr_time) < hr_dropout_timeout)
+            hr_fresh = (
+                state.last_hr_time is not None
+                and (now - state.last_hr_time) < hr_dropout_timeout
+            )
 
             # ← PARAMÉTERBŐL HASZNÁLJA (NINCS ÚJRA SZÁMOLÁS)
             if zone_mode == "power_only":
-                stale   = not power_fresh
+                stale = not power_fresh
                 elapsed = now - state.last_power_time
-                label   = "power"
+                label = "power"
             elif zone_mode == "hr_only":
-                elapsed = (now - state.last_hr_time
-                        if state.last_hr_time is not None else float("inf"))
+                elapsed = (
+                    now - state.last_hr_time
+                    if state.last_hr_time is not None
+                    else float("inf")
+                )
                 stale = not hr_fresh and state.last_hr_time is not None
-                label   = "HR"
+                label = "HR"
             else:  # higher_wins
                 stale = not power_fresh and not hr_fresh
 
@@ -2154,14 +2246,22 @@ async def dropout_checker_task(
                     # Mindkét forrás kiesett → a régebben kiesett számít
                     elapsed = max(
                         now - state.last_power_time,
-                        now - state.last_hr_time if state.last_hr_time is not None else float("inf"),
+                        (
+                            now - state.last_hr_time
+                            if state.last_hr_time is not None
+                            else float("inf")
+                        ),
                     )
                 elif not power_fresh:
                     # Csak a power esett ki (HR még friss) → power kiesési ideje
                     elapsed = now - state.last_power_time
                 elif not hr_fresh:
                     # Csak a HR esett ki (power még friss) → HR kiesési ideje
-                    elapsed = now - state.last_hr_time if state.last_hr_time is not None else float("inf")
+                    elapsed = (
+                        now - state.last_hr_time
+                        if state.last_hr_time is not None
+                        else float("inf")
+                    )
                 else:
                     # Mindkettő friss – elapsed nem releváns (stale=False), de legyen definiált
                     elapsed = 0.0
@@ -2184,6 +2284,7 @@ async def dropout_checker_task(
         if send_dropout:
             await send_zone(0, zonequeue)
 
+
 class BLECombinedSensor:
     def __init__(self, power_handler=None, hr_handler=None):
         self.power_handler = power_handler
@@ -2201,9 +2302,11 @@ class BLECombinedSensor:
             return getattr(self.hr_handler, "hr_lastdata", 0)
         return 0
 
+
 # ============================================================
 # FAN CONTROLLER – FŐ ÖSSZEHANGOLÁS
 # ============================================================
+
 
 class FanController:
     """A Smart Fan Controller fő orchestrátora.
@@ -2231,9 +2334,11 @@ class FanController:
         self.settings = load_settings(settings_file)
         self._antplus_handler: Optional[ANTPlusInputHandler] = None
         self._antplus_thread: Optional[threading.Thread] = None
-        self._tasks: list = [] # pyright: ignore[reportMissingTypeArgument]
+        self._tasks: list = []  # pyright: ignore[reportMissingTypeArgument]
         self._running = True
-        self._zwift_proc: Optional[subprocess.Popen] = None # pyright: ignore[reportMissingTypeArgument]
+        self._zwift_proc: Optional[subprocess.Popen] = (
+            None  # pyright: ignore[reportMissingTypeArgument]
+        )
         # HUD handler ref-ek
         self._ble_fan: Optional["BLEFanOutputController"] = None
         self._ble_power: Optional["BLEPowerInputHandler"] = None
@@ -2241,7 +2346,7 @@ class FanController:
         self._zwift_udp: Optional["ZwiftUDPInputHandler"] = None
         self._state: Optional[ControllerState] = None
         self._cooldown_ctrl: Optional[CooldownController] = None
-        
+
     def print_startup_info(self) -> None:
         """Kiírja az indítási konfigurációs összefoglalót."""
         s = self.settings
@@ -2250,7 +2355,7 @@ class FanController:
 
         # Forrás-specifikus buffer info
         power_buf = _resolve_buffer_settings(s, "power")
-        hr_buf    = _resolve_buffer_settings(s, "hr")
+        hr_buf = _resolve_buffer_settings(s, "hr")
 
         # Zone mode számolása itt is
         hr_enabled = hrz.get("enabled", False)
@@ -2261,38 +2366,46 @@ class FanController:
         print("-" * 60)
         zt = s["zone_thresholds"]
         print(f"FTP: {zt['ftp']}W | Érvényes tartomány: 0–{zt['max_watt']}W")
-        
-        zt = s['zone_thresholds']
+
+        zt = s["zone_thresholds"]
         power_zones = calculate_power_zones(
-            zt['ftp'], zt['min_watt'], zt['max_watt'],
-            zt['z1_max_percent'],
-            zt['z2_max_percent'],
+            zt["ftp"],
+            zt["min_watt"],
+            zt["max_watt"],
+            zt["z1_max_percent"],
+            zt["z2_max_percent"],
         )
         print(f"Zóna határok: {power_zones}")
 
         # FORRÁs-SPECIFIKUS BUFFER INFO
-        print(f"💪 Power buffer ({ds['power_source'].upper()}): "
+        print(
+            f"💪 Power buffer ({ds['power_source'].upper()}): "
             f"{power_buf['buffer_seconds']}s | "
             f"minta: {power_buf['minimum_samples']} | "
             f"rate: {power_buf['buffer_rate_hz']}Hz | "
-            f"dropout: {power_buf['dropout_timeout']}s")
-        print(f"❤️  HR buffer    ({ds['hr_source'].upper()}): "
+            f"dropout: {power_buf['dropout_timeout']}s"
+        )
+        print(
+            f"❤️  HR buffer    ({ds['hr_source'].upper()}): "
             f"{hr_buf['buffer_seconds']}s | "
             f"minta: {hr_buf['minimum_samples']} | "
             f"rate: {hr_buf['buffer_rate_hz']}Hz | "
-            f"dropout: {hr_buf['dropout_timeout']}s")
+            f"dropout: {hr_buf['dropout_timeout']}s"
+        )
 
-        print(f"Cooldown: {s['cooldown_seconds']}s  |  "
-            f"0W azonnali: {'Igen' if s['zero_power_immediate'] else 'Nem'}")
+        print(
+            f"Cooldown: {s['cooldown_seconds']}s  |  "
+            f"0W azonnali: {'Igen' if s['zero_power_immediate'] else 'Nem'}"
+        )
         print(f"BLE Fan: {s['ble']['device_name']}")
-        if s['ble'].get('pin_code'):
+        if s["ble"].get("pin_code"):
             print(f"BLE PIN: {'*' * len(str(s['ble']['pin_code']))}")
         print(f"Zónamód: {zone_mode}")
         print("-" * 60)
-        
+
     async def run(self) -> None:
         """A vezérlő fő asyncio korrutinja – elindít mindent és vár."""
-        self._tasks = [] 
+        self._tasks = []
         s = self.settings
         ds = s["datasource"]
         hr_enabled = s.get("heart_rate_zones", {}).get("enabled", False)
@@ -2301,19 +2414,24 @@ class FanController:
         else:
             zone_mode = "power_only"
 
-
         # --- Zóna határok kiszámítása ---
         power_zones = calculate_power_zones(
-            s["zone_thresholds"]["ftp"], s["zone_thresholds"]["min_watt"], s["zone_thresholds"]["max_watt"],
+            s["zone_thresholds"]["ftp"],
+            s["zone_thresholds"]["min_watt"],
+            s["zone_thresholds"]["max_watt"],
             s["zone_thresholds"]["z1_max_percent"],
             s["zone_thresholds"]["z2_max_percent"],
         )
-        hr_zones = calculate_hr_zones(
-            s["heart_rate_zones"]["max_hr"],
-            s["heart_rate_zones"]["resting_hr"],
-            s["heart_rate_zones"]["z1_max_percent"],
-            s["heart_rate_zones"]["z2_max_percent"],
-        ) if hr_enabled else {"resting": 60, "z1_max": 130, "z2_max": 148}
+        hr_zones = (
+            calculate_hr_zones(
+                s["heart_rate_zones"]["max_hr"],
+                s["heart_rate_zones"]["resting_hr"],
+                s["heart_rate_zones"]["z1_max_percent"],
+                s["heart_rate_zones"]["z2_max_percent"],
+            )
+            if hr_enabled
+            else {"resting": 60, "z1_max": 130, "z2_max": 148}
+        )
 
         # --- Komponensek létrehozása ---
         raw_power_queue: asyncio.Queue = asyncio.Queue()
@@ -2324,7 +2442,7 @@ class FanController:
         state = ControllerState()
         self._state = state
         power_buf = _resolve_buffer_settings(s, "power")
-        hr_buf    = _resolve_buffer_settings(s, "hr")
+        hr_buf = _resolve_buffer_settings(s, "hr")
 
         power_averager = PowerAverager(
             power_buf["buffer_seconds"],
@@ -2344,9 +2462,9 @@ class FanController:
         # --- BLE Fan Output ---
         ble_fan = BLEFanOutputController(s)
         self._ble_fan = ble_fan
-        self._tasks.append(asyncio.create_task(
-            ble_fan.run(zone_cmd_queue), name="BLEFanOutput"
-        ))
+        self._tasks.append(
+            asyncio.create_task(ble_fan.run(zone_cmd_queue), name="BLEFanOutput")
+        )
 
         # --- Bemeneti adatforrások ---
         power_source = ds.get("power_source", "antplus")
@@ -2355,34 +2473,34 @@ class FanController:
         if power_source == "ble":
             ble_power = BLEPowerInputHandler(s, raw_power_queue)
             self._ble_power = ble_power
-            self._tasks.append(asyncio.create_task(
-                ble_power.run(), name="BLEPowerInput"
-            ))
+            self._tasks.append(
+                asyncio.create_task(ble_power.run(), name="BLEPowerInput")
+            )
 
         if hr_source == "ble" and hr_enabled:
             ble_hr = BLEHRInputHandler(s, raw_hr_queue)
             self._ble_hr = ble_hr
-            self._tasks.append(asyncio.create_task(
-                ble_hr.run(), name="BLEHRInput"
-            ))
+            self._tasks.append(asyncio.create_task(ble_hr.run(), name="BLEHRInput"))
         # BLE input handlerek után:
         self._ble_sensor_handler = BLECombinedSensor(
-            power_handler=self._ble_power,
-            hr_handler=self._ble_hr
+            power_handler=self._ble_power, hr_handler=self._ble_hr
         )
 
-        needs_zwift = (power_source == "zwiftudp") or (hr_source == "zwiftudp" and hr_enabled)
+        needs_zwift = (power_source == "zwiftudp") or (
+            hr_source == "zwiftudp" and hr_enabled
+        )
         if needs_zwift:
             # 1. Subprocess indítása (opcionális — külön is indítható)
             try:
                 monitor_script = os.path.join(
-                    os.path.dirname(os.path.abspath(__file__)),
-                    "zwift_api_polling.py"
+                    os.path.dirname(os.path.abspath(__file__)), "zwift_api_polling.py"
                 )
 
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                startupinfo.wShowWindow = 4  # SW_SHOWNOACTIVATE — megjelenik, de nem veszi át a fókuszt
+                startupinfo.wShowWindow = (
+                    4  # SW_SHOWNOACTIVATE — megjelenik, de nem veszi át a fókuszt
+                )
 
                 self._zwift_proc = subprocess.Popen(
                     [sys.executable, monitor_script],
@@ -2412,11 +2530,13 @@ class FanController:
             # 2. UDP handler mindig létrejön, függetlenül a subprocess sikerétől
             zwiftudp = ZwiftUDPInputHandler(s, raw_power_queue, raw_hr_queue)
             self._zwift_udp = zwiftudp
-            self._tasks.append(asyncio.create_task(
-                zwiftudp.run(), name="ZwiftUDPInput"
-            ))
+            self._tasks.append(
+                asyncio.create_task(zwiftudp.run(), name="ZwiftUDPInput")
+            )
 
-        needs_antplus = (power_source == "antplus") or (hr_source == "antplus" and hr_enabled)
+        needs_antplus = (power_source == "antplus") or (
+            hr_source == "antplus" and hr_enabled
+        )
         if needs_antplus:
             if _ANTPLUS_AVAILABLE:
                 self._antplus_handler = ANTPlusInputHandler(
@@ -2424,38 +2544,68 @@ class FanController:
                 )
                 self._antplus_thread = self._antplus_handler.start()
             else:
-                logger.warning("ANT+ forrás kérve, de az openant könyvtár nem elérhető!")
+                logger.warning(
+                    "ANT+ forrás kérve, de az openant könyvtár nem elérhető!"
+                )
 
                 # --- power_buf és hr_buf már korábban létrejöttek (4. lépés) ---
 
         # --- Feldolgozó és vezérlő korrutinok ---
-        self._tasks.append(asyncio.create_task(
-            power_processor_task(
-                raw_power_queue, state, zone_event,
-                power_averager, printer, s, power_zones,
-            ), name="PowerProcessor"
-        ))
-        self._tasks.append(asyncio.create_task(
-            hr_processor_task(
-                raw_hr_queue, state, zone_event,
-                hr_averager, printer, s, hr_zones,
-            ), name="HRProcessor"
-        ))
-        self._tasks.append(asyncio.create_task(
-            zone_controller_task(
-                state, zone_cmd_queue, cooldown_ctrl, s, zone_event,
-            ), name="ZoneController"
-        ))
-        self._tasks.append(asyncio.create_task(
-            dropout_checker_task(
-                state, zone_cmd_queue, s,
-                power_averager, hr_averager,
-                power_buf["dropout_timeout"],
-                hr_buf["dropout_timeout"],
-                zone_mode,
-            ),
-            name="DropoutChecker"
-        ))
+        self._tasks.append(
+            asyncio.create_task(
+                power_processor_task(
+                    raw_power_queue,
+                    state,
+                    zone_event,
+                    power_averager,
+                    printer,
+                    s,
+                    power_zones,
+                ),
+                name="PowerProcessor",
+            )
+        )
+        self._tasks.append(
+            asyncio.create_task(
+                hr_processor_task(
+                    raw_hr_queue,
+                    state,
+                    zone_event,
+                    hr_averager,
+                    printer,
+                    s,
+                    hr_zones,
+                ),
+                name="HRProcessor",
+            )
+        )
+        self._tasks.append(
+            asyncio.create_task(
+                zone_controller_task(
+                    state,
+                    zone_cmd_queue,
+                    cooldown_ctrl,
+                    s,
+                    zone_event,
+                ),
+                name="ZoneController",
+            )
+        )
+        self._tasks.append(
+            asyncio.create_task(
+                dropout_checker_task(
+                    state,
+                    zone_cmd_queue,
+                    s,
+                    power_averager,
+                    hr_averager,
+                    power_buf["dropout_timeout"],
+                    hr_buf["dropout_timeout"],
+                    zone_mode,
+                ),
+                name="DropoutChecker",
+            )
+        )
 
         print()
         print("🚴 Figyelés elindítva... (Ctrl+C a leállításhoz)")
@@ -2478,7 +2628,6 @@ class FanController:
             if self._antplus_thread and self._antplus_thread.is_alive():
                 self._antplus_thread.join(timeout=5.0)
 
-
     def stop(self) -> None:
         self._running = False
         for task in self._tasks:
@@ -2497,8 +2646,12 @@ class FanController:
         # Zwift subprocess leállítása
         if hasattr(self, "_zwift_proc") and self._zwift_proc is not None:
             if self._zwift_proc.poll() is None:  # csak ha még fut
-                logger.info(f"zwift_api_polling.py leállítása (PID: {self._zwift_proc.pid})...")
-                print(f"[INFO] zwift_api_polling.py leállítása (PID: {self._zwift_proc.pid})...")
+                logger.info(
+                    f"zwift_api_polling.py leállítása (PID: {self._zwift_proc.pid})..."
+                )
+                print(
+                    f"[INFO] zwift_api_polling.py leállítása (PID: {self._zwift_proc.pid})..."
+                )
                 try:
                     self._zwift_proc.terminate()
                     self._zwift_proc.wait(timeout=5.0)
@@ -2511,11 +2664,13 @@ class FanController:
                 finally:
                     self._zwift_proc = None
 
+
 # ============================================================
 # HUD ABLAK (tkinter)
 # ============================================================
 
 import tkinter as tk
+
 
 class HUDWindow:
     """Lebegő, átlátszó HUD ablak – valós idejű adatok megjelenítése."""
@@ -2523,6 +2678,10 @@ class HUDWindow:
     UPDATE_INTERVAL_MS = 500  # 0.5 másodpercenként frissül
 
     def __init__(self, controller: "FanController") -> None:
+        self._base_width = 260
+        self._base_height = 300
+        self._scale = 1.0
+
         self._ctrl = controller
 
         # ───────── ROOT ABLAK ─────────
@@ -2538,15 +2697,37 @@ class HUDWindow:
         font_small = ("Consolas", 11)
 
         # ───────── LABEL-EK ─────────
-        self._lbl_zone = tk.Label(self._root, text="Zóna: –", fg="#00FF88", bg="black", font=font_big)
-        self._lbl_power = tk.Label(self._root, text="Power: – W", fg="#FFD700", bg="black", font=font_small)
-        self._lbl_hr = tk.Label(self._root, text="HR: – bpm", fg="#FF6666", bg="black", font=font_small)
-        self._lbl_ble = tk.Label(self._root, text="BLE: –", fg="#AAAAAA", bg="black", font=font_small)
-        self._lbl_ble_sens = tk.Label(self._root, text="BLE P: – HR: –", fg="#AAAAAA", bg="black", font=font_small)
-        self._lbl_ant = tk.Label(self._root, text="ANT+: –", fg="#AAAAAA", bg="black", font=font_small)
-        self._lbl_zwift_udp = tk.Label(self._root, text="ZwiftUDP: –", fg="#AAAAAA", bg="black", font=font_small)
-        self._lbl_last_sent = tk.Label(self._root, text="Utolsó küldés: –", fg="#AAAAAA", bg="black", font=font_small)
-        self._lbl_cool = tk.Label(self._root, text="Cooldown: –", fg="#AAAAAA", bg="black", font=font_small)
+        self._lbl_zone = tk.Label(
+            self._root, text="Zóna: –", fg="#00FF88", bg="black", font=font_big
+        )
+        self._lbl_power = tk.Label(
+            self._root, text="Power: – W", fg="#FFD700", bg="black", font=font_small
+        )
+        self._lbl_hr = tk.Label(
+            self._root, text="HR: – bpm", fg="#FF6666", bg="black", font=font_small
+        )
+        self._lbl_ble = tk.Label(
+            self._root, text="BLE: –", fg="#AAAAAA", bg="black", font=font_small
+        )
+        self._lbl_ble_sens = tk.Label(
+            self._root, text="BLE P: – HR: –", fg="#AAAAAA", bg="black", font=font_small
+        )
+        self._lbl_ant = tk.Label(
+            self._root, text="ANT+: –", fg="#AAAAAA", bg="black", font=font_small
+        )
+        self._lbl_zwift_udp = tk.Label(
+            self._root, text="ZwiftUDP: –", fg="#AAAAAA", bg="black", font=font_small
+        )
+        self._lbl_last_sent = tk.Label(
+            self._root,
+            text="Utolsó küldés: –",
+            fg="#AAAAAA",
+            bg="black",
+            font=font_small,
+        )
+        self._lbl_cool = tk.Label(
+            self._root, text="Cooldown: –", fg="#AAAAAA", bg="black", font=font_small
+        )
 
         self._lbl_zone.pack(pady=(10, 2))
         self._lbl_power.pack()
@@ -2560,26 +2741,44 @@ class HUDWindow:
 
         # ───────── ÁTLÁTSZÓSÁG SLIDER ─────────
         self._slider_frame = tk.Frame(self._root, bg="#1a1a1a", relief="raised", bd=1)
-        self._slider_frame.pack(pady=(8, 12), padx=8, fill=tk.X)
+        #self._slider_frame.pack(pady=(8, 12), padx=8, fill=tk.X)
+        self._slider_frame.pack(pady=(4, 4), padx=6, fill=tk.X)
 
         tk.Label(
-            self._slider_frame, text="Átlátszóság:", fg="#00FF88", bg="#1a1a1a",
-            font=("Consolas", 11, "bold")
+            self._slider_frame,
+            text="Alpha:",
+            fg="#00FF88",
+            bg="#1a1a1a",
+            font=("Consolas", 11, "bold"),
         ).pack(side=tk.LEFT)
 
         self._alpha_value = tk.Label(
-            self._slider_frame, text="85%", fg="#00FF88", bg="#1a1a1a",
-            font=("Consolas", 12, "bold"), width=4
+            self._slider_frame,
+            text="85%",
+            fg="#00FF88",
+            bg="#1a1a1a",
+            font=("Consolas", 11, "bold"),
+            width=3,
         )
         self._alpha_value.pack(side=tk.RIGHT, padx=(10, 0))
 
         self._alpha_slider = tk.Scale(
-            self._slider_frame, from_=20, to=100, orient=tk.HORIZONTAL,
-            fg="#00FF88", bg="#1a1a1a", troughcolor="#555555",
-            activebackground="#00AA44", highlightbackground="#00FF88",
-            highlightthickness=2, borderwidth=1, relief="solid",
-            command=self._on_alpha_change, showvalue=False,
-            length=160, width=25
+            self._slider_frame,
+            from_=20,
+            to=100,
+            orient=tk.HORIZONTAL,
+            fg="#00FF88",
+            bg="#1a1a1a",
+            troughcolor="#555555",
+            activebackground="#00AA44",
+            highlightbackground="#00FF88",
+            highlightthickness=2,
+            borderwidth=1,
+            relief="solid",
+            command=self._on_alpha_change,
+            showvalue=False,
+            length=160,
+            width=14,
         )
         self._alpha_slider.set(85)
         self._alpha_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 0))
@@ -2590,9 +2789,14 @@ class HUDWindow:
 
         # Csak label-ek + háttér húzzák az ablakot
         draggable_labels = [
-            self._lbl_zone, self._lbl_power, self._lbl_hr,
-            self._lbl_ble, self._lbl_ant, self._lbl_zwift_udp,
-            self._lbl_last_sent, self._lbl_cool
+            self._lbl_zone,
+            self._lbl_power,
+            self._lbl_hr,
+            self._lbl_ble,
+            self._lbl_ant,
+            self._lbl_zwift_udp,
+            self._lbl_last_sent,
+            self._lbl_cool,
         ]
         for lbl in draggable_labels:
             lbl.bind("<ButtonPress-1>", self._on_drag_start)
@@ -2610,14 +2814,64 @@ class HUDWindow:
         self._menu = tk.Menu(self._root, tearoff=0)
         self._menu.add_command(label="Bezárás", command=self.close)
         self._menu.add_separator()
-        self._menu.add_command(label="Átlátszóság: 50%", command=lambda: self._set_alpha_from_menu(50))
-        self._menu.add_command(label="Átlátszóság: 85%", command=lambda: self._set_alpha_from_menu(85))
-        self._menu.add_command(label="Átlátszóság: 100%", command=lambda: self._set_alpha_from_menu(100))
+        self._menu.add_command(
+            label="Átlátszóság: 50%", command=lambda: self._set_alpha_from_menu(50)
+        )
+        self._menu.add_command(
+            label="Átlátszóság: 85%", command=lambda: self._set_alpha_from_menu(85)
+        )
+        self._menu.add_command(
+            label="Átlátszóság: 100%", command=lambda: self._set_alpha_from_menu(100)
+        )
+
+        # ───────── RESIZE GRIP (Canvas háromszöggel) ─────────
+        self._resize_grip = tk.Canvas(
+            self._root,
+            width=16,
+            height=16,
+            bg="black",
+            highlightthickness=0,
+            cursor="size_nw_se"
+        )
+        self._resize_grip.place(relx=1.0, rely=1.0, anchor="se")
+
+        # háromszög rajzolása
+        self._resize_grip.create_polygon(
+            0, 16,   # bal alsó
+            16, 16,  # jobb alsó
+            16, 0,   # jobb felső
+            fill="#666666",
+            outline="#444444"
+        )
+
+        self._resize_grip.bind("<ButtonPress-1>", self._on_resize_start)
+        self._resize_grip.bind("<B1-Motion>", self._on_resize_drag)
 
         self._update()
 
     # ───────── SEGÉDFÜGGVÉNYEK ─────────
+    def _on_resize_start(self, event):
+        self._resize_start_w = self._root.winfo_width()
+        self._resize_start_h = self._root.winfo_height()
+        self._resize_start_x = event.x_root
+        self._resize_start_y = event.y_root
 
+    def _on_resize_drag(self, event):
+        dx = event.x_root - self._resize_start_x
+        dy = event.y_root - self._resize_start_y
+
+        new_w = max(200, self._resize_start_w + dx)
+        new_h = max(200, self._resize_start_h + dy)
+
+        self._root.geometry(f"{new_w}x{new_h}")
+
+        # új scale faktor
+        self._scale = new_w / self._base_width
+        self._apply_scale()
+
+        # grip újrapozicionálása (ez a kulcs!)
+        self._resize_grip.place(relx=1.0, rely=1.0, anchor="se")
+        
     def _set_alpha_from_menu(self, percent: int) -> None:
         self._root.attributes("-alpha", percent / 100.0)
         self._alpha_slider.set(percent)
@@ -2667,8 +2921,12 @@ class HUDWindow:
             zone_colors = {0: "#888888", 1: "#00FF88", 2: "#FFD700", 3: "#FF4444"}
             color = zone_colors.get(zone, "#FFFFFF") if zone is not None else "#888888"
 
-            self._lbl_zone.config(text=f"Zóna: {'–' if zone is None else zone}", fg=color)
-            self._lbl_power.config(text=f"Power: {'–' if power is None else f'{power:.0f} W'}")
+            self._lbl_zone.config(
+                text=f"Zóna: {'–' if zone is None else zone}", fg=color
+            )
+            self._lbl_power.config(
+                text=f"Power: {'–' if power is None else f'{power:.0f} W'}"
+            )
             self._lbl_hr.config(text=f"HR: {'–' if hr is None else f'{hr:.0f} bpm'}")
 
         # BLE
@@ -2679,36 +2937,90 @@ class HUDWindow:
             self._lbl_ble.config(text=f"BLE esp32 vent: {status}", fg=color)
         else:
             self._lbl_ble.config(text="BLE: –", fg="#AAAAAA")
-        
-        # BLE szenzorok (pulzusmérő / teljesítménymérő)
-        ble = getattr(self._ctrl, "_ble_sensor_handler", None)
-        if ble is not None:
-            now = time.monotonic()
-            power_ok = (ble.power_lastdata > 0) and (now - ble.power_lastdata < 10)
-            hr_ok = (ble.hr_lastdata > 0) and (now - ble.hr_lastdata < 10)
-            p_txt = "✓" if power_ok else "✗"
-            h_txt = "✓" if hr_ok else "✗"
-            color = "#00FF88" if (power_ok and hr_ok) else "#FFD700" if (power_ok or hr_ok) else "#FF4444"
-            self._lbl_ble_sens.config(text=f"BLE P:{p_txt} HR:{h_txt}", fg=color)
-        else:
-            self._lbl_ble_sens.config(text="BLE: –", fg="#AAAAAA")
 
-        # ANT+
-        ant = getattr(self._ctrl, "_antplus_handler", None)
-        if ant is not None:
-            now = time.monotonic()
-            power_ok = (ant.power_lastdata > 0) and (now - ant.power_lastdata < 10)
-            hr_ok = (ant.hr_lastdata > 0) and (now - ant.hr_lastdata < 10)
-            p_txt = "✓" if power_ok else "✗"
-            h_txt = "✓" if hr_ok else "✗"
-            color = "#00FF88" if (power_ok and hr_ok) else "#FFD700" if (power_ok or hr_ok) else "#FF4444"
-            self._lbl_ant.config(text=f"ANT+ P:{p_txt} HR:{h_txt}", fg=color)
+        # BLE szenzorok (pulzusmérő / teljesítménymérő)
+        ds = self._ctrl.settings["datasource"]
+
+        power_ble = (ds.get("power_source") == "ble")
+        hr_ble = (ds.get("hr_source") == "ble")
+
+        # Ha egyik adatforrás sem BLE → teljes BLE kijelzés kikapcsolva
+        if not power_ble and not hr_ble:
+            self._lbl_ble_sens.config(text="BLE: –", fg="#AAAAAA")
         else:
+            # csak akkor fut a BLE logika, ha BLE a datasource
+            ble = getattr(self._ctrl, "_ble_sensor_handler", None)
+            if ble is not None:
+                now = time.monotonic()
+
+                power_ok = power_ble and (ble.power_lastdata > 0) and (now - ble.power_lastdata < 10)
+                hr_ok    = hr_ble    and (ble.hr_lastdata > 0)    and (now - ble.hr_lastdata < 10)
+
+                p_txt = "✓" if power_ok else ("–" if not power_ble else "✗")
+                h_txt = "✓" if hr_ok    else ("–" if not hr_ble    else "✗")
+
+                ble_states = []
+                if power_ble: ble_states.append(power_ok)
+                if hr_ble:    ble_states.append(hr_ok)
+
+                if any(state is False for state in ble_states):
+                    row_color = "#FF4444"
+                elif all(state is True for state in ble_states):
+                    row_color = "#00FF88"
+                else:
+                    row_color = "#FFD700"
+
+                self._lbl_ble_sens.config(text=f"BLE P:{p_txt} HR:{h_txt}", fg=row_color)
+
+        # ANT+ datasource státusz
+        ds = self._ctrl.settings["datasource"]
+        power_ant = (ds.get("power_source") == "antplus")
+        hr_ant    = (ds.get("hr_source") == "antplus")
+
+        # ANT+ handler
+        ant = getattr(self._ctrl, "_antplus_handler", None)
+
+        # Ha egyik adatforrás sem ANT+ → teljes ANT+ kijelzés kikapcsolva
+        if not power_ant and not hr_ant:
             self._lbl_ant.config(text="ANT+: –", fg="#AAAAAA")
+        else:
+            if ant is not None:
+                now = time.monotonic()
+
+                # Csak akkor vizsgáljuk az adatot, ha ANT+ a datasource
+                power_ok = power_ant and (ant.power_lastdata > 0) and (now - ant.power_lastdata < 10)
+                hr_ok    = hr_ant    and (ant.hr_lastdata > 0)    and (now - ant.hr_lastdata < 10)
+
+                # Ikonok
+                p_txt = "✓" if power_ok else ("–" if not power_ant else "✗")
+                h_txt = "✓" if hr_ok    else ("–" if not hr_ant    else "✗")
+
+                # Sor színének meghatározása CSAK az ANT+ részek alapján
+                ant_states = []
+                if power_ant: ant_states.append(power_ok)
+                if hr_ant:    ant_states.append(hr_ok)
+
+                if any(state is False for state in ant_states):
+                    row_color = "#FF4444"
+                elif all(state is True for state in ant_states):
+                    row_color = "#00FF88"
+                else:
+                    row_color = "#FFD700"
+
+                self._lbl_ant.config(text=f"ANT+ P:{p_txt} HR:{h_txt}", fg=row_color)
+            else:
+                self._lbl_ant.config(text="ANT+: –", fg="#AAAAAA")
+
+
 
         # ZwiftUDP státusz
         zwift = getattr(self._ctrl, "_zwift_udp", None)
-        if zwift is not None and (zwift.process_power or zwift.process_hr):
+        ds = self._ctrl.settings["datasource"]
+
+        power_zwift = (ds.get("power_source") == "zwiftudp")
+        hr_zwift = (ds.get("hr_source") == "zwiftudp")
+
+        if zwift is not None and (power_zwift or hr_zwift):
             now = time.monotonic()
             ok = zwift.last_packet_time > 0 and (now - zwift.last_packet_time) < 5.0
             status = "✓ ZwiftUDP" if ok else "✗ ZwiftUDP"
@@ -2732,6 +3044,25 @@ class HUDWindow:
             self._lbl_cool.config(text="Cooldown: –")
 
         self._root.after(self.UPDATE_INTERVAL_MS, self._update)
+    
+    def _apply_scale(self):
+        s = self._scale
+
+        # nagy betű
+        self._lbl_zone.config(font=("Consolas", int(18 * s), "bold"))
+
+        # kis betűk
+        small = int(11 * s)
+        for lbl in [
+            self._lbl_power, self._lbl_hr, self._lbl_ble,
+            self._lbl_ble_sens, self._lbl_ant, self._lbl_zwift_udp,
+            self._lbl_last_sent, self._lbl_cool
+        ]:
+            lbl.config(font=("Consolas", small))
+
+        # slider skálázása
+        self._alpha_slider.config(length=int(160 * s), width=int(25 * s))
+        self._alpha_value.config(font=("Consolas", int(12 * s), "bold"))
 
     # ───────── FUTTATÁS / BEZÁRÁS ─────────
 
@@ -2744,9 +3075,11 @@ class HUDWindow:
         except Exception:
             pass
 
+
 # ============================================================
 # MAIN
 # ============================================================
+
 
 def main() -> None:
     logging.getLogger("swift_fan_controller_new").setLevel(logging.ERROR)
@@ -2766,7 +3099,7 @@ def main() -> None:
             return
         cleaned_up = True
         controller.stop()
-        
+
     def signal_handler(signum: int, frame: Any) -> None:
         print(f"\nSignal {signum} fogadva, leállítás...")
         loop.call_soon_threadsafe(loop.stop)
@@ -2796,7 +3129,7 @@ def main() -> None:
         print("\nLeállítás (Ctrl+C)...")
     finally:
         hud.close()
-        cleanup()         # ← ELŐBB stop (még nyitott loop-on)
+        cleanup()  # ← ELŐBB stop (még nyitott loop-on)
 
         # engedjük lefutni a cancel-eket
         loop.call_soon_threadsafe(lambda: None)
@@ -2810,7 +3143,6 @@ def main() -> None:
 
         asyncio_thread.join(timeout=3.0)
         print("\nProgram leállítva.")
-
 
 
 if __name__ == "__main__":
