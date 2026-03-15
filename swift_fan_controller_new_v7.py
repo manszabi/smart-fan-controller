@@ -99,6 +99,7 @@ _TKINTER_AVAILABLE: bool = False
 
 if TYPE_CHECKING:
     import tkinter as tk
+    import tkinter.font as tkfont
 else:
     try:
         import tkinter as tk
