@@ -47,7 +47,7 @@ import os
 
 from collections import deque
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple, TYPE_CHECKING
 
 # --- Típus aliasok a magic string-ek kiváltásához ---
 DataSource = Literal["antplus", "ble", "zwiftudp"]
@@ -87,12 +87,16 @@ except ImportError:
     pass
 
 _TKINTER_AVAILABLE: bool = False
-try:
-    import tkinter as tk
 
-    _TKINTER_AVAILABLE = True
-except ImportError:
-    tk = None  # type: ignore
+if TYPE_CHECKING:
+    import tkinter as tk
+else:
+    try:
+        import tkinter as tk
+
+        _TKINTER_AVAILABLE = True
+    except ImportError:
+        tk = None  # type: ignore[assignment]
 
 __version__ = "1.0.0"
 
@@ -1221,7 +1225,7 @@ async def _scan_ble_with_autodiscovery(
         return None, []
 
     devices_info: List[Tuple[Optional[str], str, List[str]]] = []
-    matched = None
+    matched: Optional[Any] = None
 
     try:
         # return_adv=True: dict[str, tuple[BLEDevice, AdvertisementData]]
@@ -1232,8 +1236,11 @@ async def _scan_ble_with_autodiscovery(
         items = discovered.values() if isinstance(discovered, dict) else discovered
 
         for item in items:
+            device: Any = None
+            uuids: List[str] = []
             if isinstance(item, tuple) and len(item) == 2:
-                device, adv_data = item
+                device = item[0]
+                adv_data: Any = item[1]
                 uuids = (
                     list(adv_data.service_uuids)
                     if hasattr(adv_data, "service_uuids") and adv_data.service_uuids
@@ -1241,9 +1248,10 @@ async def _scan_ble_with_autodiscovery(
                 )
             else:
                 device = item
-                uuids = []
 
-            devices_info.append((device.name, device.address, uuids))
+            dev_name: Optional[str] = getattr(device, "name", None)
+            dev_addr: str = getattr(device, "address", str(device))
+            devices_info.append((dev_name, dev_addr, uuids))
 
             if target_service_uuid and matched is None:
                 if target_service_uuid.lower() in [u.lower() for u in uuids]:
@@ -1251,15 +1259,18 @@ async def _scan_ble_with_autodiscovery(
 
     except TypeError:
         # Fallback régebbi Bleak verziókhoz (return_adv nem támogatott)
-        devices = await BleakScanner.discover(timeout=scan_timeout)
-        devices_info = [(d.name, d.address, []) for d in devices]
+        devices: Any = await BleakScanner.discover(timeout=scan_timeout)
+        devices_info = [
+            (getattr(d, "name", None), getattr(d, "address", ""), [])
+            for d in devices
+        ]
         matched = None
 
     except Exception as exc:
         logger.error(f"BLE scan hiba ({scan_context}): {exc}")
         return None, []
 
-    matched_addr = matched.address if matched else None
+    matched_addr: Optional[str] = getattr(matched, "address", None) if matched else None
     _print_ble_devices(devices_info, scan_context, matched_addr)
     _log_ble_devices_to_file(devices_info, scan_context)
 
@@ -1740,8 +1751,10 @@ class ANTPlusInputHandler:
         """Inicializálja az ANT+ node-ot és regisztrálja az eszközöket."""
         if not _ANTPLUS_AVAILABLE:
             raise RuntimeError("openant könyvtár nem elérhető")
-        self._node = Node()
-        self._node.set_network_key(0x00, ANTPLUS_NETWORK_KEY)
+        node = Node()
+        assert node is not None  # Pylance: Node() mindig valid objektumot ad
+        node.set_network_key(0x00, ANTPLUS_NETWORK_KEY)
+        self._node = node
         self._devices = []
 
         if self.ds.get("power_source", "antplus") == "antplus":
