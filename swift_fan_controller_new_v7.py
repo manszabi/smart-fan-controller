@@ -93,10 +93,12 @@ if TYPE_CHECKING:
 else:
     try:
         import tkinter as tk
+        import tkinter.font as tkfont
 
         _TKINTER_AVAILABLE = True
     except ImportError:
         tk = None  # type: ignore[assignment]
+        tkfont = None  # type: ignore[assignment]
 
 __version__ = "1.0.0"
 
@@ -3171,13 +3173,31 @@ class HUDWindow:
         self._root.geometry(f"{self._base_width}x{self._base_height}+20+20")
         self._root.configure(bg=self.BG)
 
+        # ───────── LCARS FONT BETÖLTÉS ─────────
+        self._try_load_lcars_font()
+        self._font_family = self._detect_best_font()
+
+        # Referencia listák a skálázható label-ekhez
+        self._row_key_labels: list = []
+        self._status_key_labels: list = []
+
         # ───────── LCARS FEJLÉC ─────────
+        self._header_height = 50
         header = tk.Canvas(
-            self._root, bg=self.BG, highlightthickness=0, height=50
+            self._root, bg=self.BG, highlightthickness=0, height=self._header_height
         )
-        header.pack(fill=tk.X, padx=0, pady=0)
+        header.pack(side=tk.TOP, fill=tk.X, padx=0, pady=0)
         self._header_canvas = header
         self._draw_header(header, self._base_width)
+
+        # ───────── LCARS LÁBLÉC (ELŐRE PACK-ELJÜK, HOGY NE TŰNJÖN EL) ─────────
+        self._footer_height = 50
+        footer = tk.Canvas(
+            self._root, bg=self.BG, highlightthickness=0, height=self._footer_height
+        )
+        footer.pack(side=tk.BOTTOM, fill=tk.X, padx=0, pady=0)
+        self._footer_canvas = footer
+        self._draw_footer(footer, self._base_width)
 
         # ───────── FŐ TARTALOM KERET ─────────
         body = tk.Frame(self._root, bg=self.BG)
@@ -3197,54 +3217,65 @@ class HUDWindow:
         zone_frame.pack(fill=tk.X, padx=6, pady=(8, 4))
 
         self._lbl_zone_label = tk.Label(
-            zone_frame, text="FAN ZONE", fg=self.LCARS_CYAN_DIM,
-            bg="#001828", font=("Consolas", 8), anchor="w"
+            zone_frame, text="FAN ZONE", fg="#000a14",
+            bg=self.LCARS_CYAN, font=(self._font_family, 9, "bold"),
+            anchor="w", padx=4, pady=2,
         )
-        self._lbl_zone_label.pack(fill=tk.X, padx=8, pady=(4, 0))
+        self._lbl_zone_label.pack(fill=tk.X, padx=0, pady=(0, 0))
 
         self._lbl_zone = tk.Label(
             zone_frame, text="– – –", fg=self.LCARS_CYAN,
-            bg="#001828", font=("Consolas", 28, "bold"), anchor="center"
+            bg="#001828", font=(self._font_family, 30, "bold"), anchor="center"
         )
         self._lbl_zone.pack(fill=tk.X, padx=8, pady=(0, 6))
 
-        # ───────── TELEMETRIA SOROK ─────────
-        self._lbl_power = self._make_row(content, "POWER", "– – –", self.LCARS_GOLD)
-        self._lbl_hr = self._make_row(content, "HEART RATE", "– – –", self.LCARS_RED)
+        # ───────── TELEMETRIA SOROK (színes LCARS háttérrel) ─────────
+        self._lbl_power = self._make_row(
+            content, "POWER", "– – –", self.LCARS_GOLD, label_bg=self.LCARS_TAN)
+        self._lbl_hr = self._make_row(
+            content, "HEART RATE", "– – –", self.LCARS_RED, label_bg=self.LCARS_ORANGE)
 
         # ───────── SZEPARÁTOR ─────────
         sep = tk.Canvas(content, bg=self.PANEL_BG, height=2, highlightthickness=0)
         sep.pack(fill=tk.X, padx=10, pady=(6, 6))
         sep.create_line(0, 1, 400, 1, fill=self.BORDER_GLOW, width=1)
 
-        # ───────── RENDSZER STÁTUSZ ─────────
-        self._lbl_ble = self._make_status_row(content, "BLE FAN", "OFFLINE")
-        self._lbl_ble_sens = self._make_status_row(content, "BLE SENS", "– – –")
-        self._lbl_ant = self._make_status_row(content, "ANT+", "– – –")
-        self._lbl_zwift_udp = self._make_status_row(content, "ZWIFT", "– – –")
+        # ───────── RENDSZER STÁTUSZ (színes LCARS háttérrel) ─────────
+        self._lbl_ble = self._make_status_row(
+            content, "BLE FAN", "OFFLINE", label_bg=self.LCARS_BLUE)
+        self._lbl_ble_sens = self._make_status_row(
+            content, "BLE SENS", "– – –", label_bg=self.LCARS_BLUE)
+        self._lbl_ant = self._make_status_row(
+            content, "ANT+", "– – –", label_bg=self.LCARS_PURPLE)
+        self._lbl_zwift_udp = self._make_status_row(
+            content, "ZWIFT", "– – –", label_bg=self.LCARS_PURPLE)
 
         # ───────── SZEPARÁTOR 2 ─────────
         sep2 = tk.Canvas(content, bg=self.PANEL_BG, height=2, highlightthickness=0)
         sep2.pack(fill=tk.X, padx=10, pady=(6, 4))
         sep2.create_line(0, 1, 400, 1, fill=self.BORDER_GLOW, width=1)
 
-        # ───────── RENDSZER INFO ─────────
-        self._lbl_last_sent = self._make_status_row(content, "LAST TX", "– – –")
-        self._lbl_cool = self._make_status_row(content, "COOLDOWN", "– – –")
+        # ───────── RENDSZER INFO (színes LCARS háttérrel) ─────────
+        self._lbl_last_sent = self._make_status_row(
+            content, "LAST TX", "– – –", label_bg=self.LCARS_TAN)
+        self._lbl_cool = self._make_status_row(
+            content, "COOLDOWN", "– – –", label_bg=self.LCARS_TAN)
 
         # ───────── ALPHA SLIDER ─────────
         slider_frame = tk.Frame(content, bg=self.PANEL_BG)
-        slider_frame.pack(fill=tk.X, padx=8, pady=(6, 4))
+        slider_frame.pack(fill=tk.X, padx=6, pady=(6, 4))
         self._slider_frame = slider_frame
 
-        tk.Label(
-            slider_frame, text="OPACITY", fg=self.LCARS_CYAN_DIM,
-            bg=self.PANEL_BG, font=("Consolas", 8), anchor="w"
-        ).pack(side=tk.LEFT)
+        self._opacity_label = tk.Label(
+            slider_frame, text="OPACITY", fg="#000a14",
+            bg=self.LCARS_GOLD, font=(self._font_family, 9, "bold"),
+            anchor="w", padx=4, pady=2
+        )
+        self._opacity_label.pack(side=tk.LEFT)
 
         self._alpha_value = tk.Label(
             slider_frame, text="92%", fg=self.LCARS_CYAN,
-            bg=self.PANEL_BG, font=("Consolas", 10, "bold"), width=4
+            bg=self.PANEL_BG, font=(self._font_family, 11, "bold"), width=4
         )
         self._alpha_value.pack(side=tk.RIGHT, padx=(4, 0))
 
@@ -3262,14 +3293,6 @@ class HUDWindow:
         )
         self._alpha_slider.set(92)
         self._alpha_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 0))
-
-        # ───────── LCARS LÁBLÉC ─────────
-        footer = tk.Canvas(
-            self._root, bg=self.BG, highlightthickness=0, height=50
-        )
-        footer.pack(fill=tk.X, padx=0, pady=0)
-        self._footer_canvas = footer
-        self._draw_footer(footer, self._base_width)
 
         # ───────── DRAG & RESIZE ─────────
         self._drag_x = 0
@@ -3299,7 +3322,7 @@ class HUDWindow:
         self._menu = tk.Menu(
             self._root, tearoff=0, bg="#001828", fg=self.LCARS_CYAN,
             activebackground=self.LCARS_BLUE, activeforeground="white",
-            font=("Consolas", 10),
+            font=(self._font_family, 10),
         )
         self._menu.add_command(label="Bezárás", command=self.close)
         self._menu.add_separator()
@@ -3329,6 +3352,56 @@ class HUDWindow:
         self._content = content
         self._update()
 
+    # ───────── LCARS FONT BETÖLTÉS ─────────
+
+    def _try_load_lcars_font(self) -> None:
+        """Antonio font letöltése és betöltése (Windows)."""
+        if _platform.system() != "Windows":
+            return
+        try:
+            import urllib.request
+            import ctypes
+
+            font_dir = os.path.join(os.path.expanduser("~"), ".swift_fan_fonts")
+            os.makedirs(font_dir, exist_ok=True)
+
+            for style in ("Bold", "Regular"):
+                fpath = os.path.join(font_dir, f"Antonio-{style}.ttf")
+                if not os.path.exists(fpath):
+                    url = (
+                        "https://raw.githubusercontent.com/google/fonts/main/"
+                        f"ofl/antonio/static/Antonio-{style}.ttf"
+                    )
+                    urllib.request.urlretrieve(url, fpath)
+                FR_PRIVATE = 0x10
+                ctypes.windll.gdi32.AddFontResourceExW(fpath, FR_PRIVATE, 0)
+        except Exception:
+            pass  # sikertelen letöltés: rendszer fontokra váltunk
+
+    def _detect_best_font(self) -> str:
+        """Legjobb elérhető LCARS-stílusú font kiválasztása."""
+        try:
+            available = set(tkfont.families(root=self._root))
+        except Exception:
+            return "Consolas"
+
+        # Prioritás: autentikus LCARS kinézet → modern futurisztikus → fallback
+        preferred = [
+            "Antonio",            # Google Font – legközelebbi az LCARS-hoz
+            "Michroma",           # Google Font – tiszta, futurisztikus
+            "Century Gothic",     # Windows – kerekített, LCARS-szerű
+            "Eras Bold ITC",      # MS Office – nagyon LCARS-szerű
+            "Eras Medium ITC",    # MS Office
+            "Bahnschrift",        # Windows 10+ – modern, tiszta
+            "Trebuchet MS",       # Windows – kerekített sans-serif
+            "Segoe UI",           # Windows – tiszta, olvasható
+            "Consolas",           # Monospace fallback
+        ]
+        for f in preferred:
+            if f in available:
+                return f
+        return "Consolas"
+
     # ───────── LCARS DEKORÁCIÓS RAJZOK ─────────
 
     @staticmethod
@@ -3347,66 +3420,66 @@ class HUDWindow:
         return pts
 
     def _draw_header(self, canvas: tk.Canvas, w: int) -> None:
-        """LCARS fejléc rajzolása – felső sáv + lekerekített belső sarok."""
-        canvas.delete("all")
-        bar_h = 14        # felső sáv vastagsága
-        sw = 16           # sidebar szélesség
-        R = 26            # belső ív sugara
+        """LCARS fejléc rajzolása – felső sáv + lekerekített belső sarok.
 
-        # Elbow polygon: felső sáv + ív lefelé a sidebar-ba
+        Minden méret a scale-hez igazodik.
+        """
+        canvas.delete("all")
+        s = self._scale
+        ch = self._header_height  # aktuális canvas magasság
+        bar_h = max(8, int(14 * s))
+        sw = max(10, int(16 * s))
+        R = max(14, int(26 * s))
+
         pts = [
-            0, 0,         # bal felső sarok (külső)
-            w - 6, 0,     # jobb felső
-            w - 6, bar_h, # jobb oldal, sáv alja
+            0, 0,
+            w - 6, 0,
+            w - 6, bar_h,
         ]
-        # Ív: (sw+R, bar_h) → (sw, bar_h+R)  (negyedkör, 90°→180°)
         pts.extend(self._arc_points(sw + R, bar_h + R, R, 90, 180, 20))
-        # Le a sidebar mentén a canvas aljáig
-        pts.extend([sw, 50, 0, 50])
+        pts.extend([sw, ch, 0, ch])
         canvas.create_polygon(pts, fill=self.LCARS_ORANGE, outline="", smooth=False)
 
-        # Belső sötét terület (a sáv alatt, az ívtől jobbra)
-        # Szöveg háttér
+        title_size = max(8, int(12 * s))
         canvas.create_text(
-            (sw + R + w - 6) // 2, bar_h + 18, text="SWIFT FAN CTRL",
-            fill=self.LCARS_CYAN, font=("Consolas", 11, "bold"),
+            (sw + R + w - 6) // 2, bar_h + max(10, int(18 * s)),
+            text="SWIFT FAN CTRL",
+            fill=self.LCARS_CYAN, font=(self._font_family, title_size, "bold"),
         )
-        # Verziószám badge
+        badge_w = max(40, int(62 * s))
         canvas.create_rectangle(
-            w - 70, 1, w - 8, bar_h - 2,
+            w - badge_w - 8, 1, w - 8, bar_h - 2,
             fill=self.LCARS_MAGENTA, outline="",
         )
+        ver_size = max(6, int(7 * s))
         canvas.create_text(
-            w - 39, bar_h // 2 - 1, text="v1.0.0",
-            fill="#FFFFFF", font=("Consolas", 7),
+            w - badge_w // 2 - 8, bar_h // 2 - 1, text="v1.0.0",
+            fill="#FFFFFF", font=(self._font_family, ver_size),
         )
 
     def _draw_footer(self, canvas: tk.Canvas, w: int) -> None:
         """LCARS lábléc rajzolása – alsó sáv + lekerekített belső sarok.
 
-        Szimmetrikus a fejléccel: azonos sáv vastagság, ív sugár és sidebar szélesség.
+        Szimmetrikus a fejléccel: minden méret a scale-hez igazodik.
         """
         canvas.delete("all")
-        fh = 50           # footer canvas magasság (= header)
-        bar_h = 14        # alsó sáv vastagsága (= header)
-        sw = 16           # sidebar szélesség (= header)
-        R = 26            # belső ív sugara (= header)
-        bar_top = fh - bar_h  # sáv felső éle
+        s = self._scale
+        fh = self._footer_height  # aktuális canvas magasság
+        bar_h = max(8, int(14 * s))
+        sw = max(10, int(16 * s))
+        R = max(14, int(26 * s))
+        bar_top = fh - bar_h
 
-        # Elbow polygon: sidebar-ból ív → alsó sáv
         pts = [
-            0, 0,         # bal felső (sidebar teteje)
-            sw, 0,        # sidebar jobb felső
+            0, 0,
+            sw, 0,
         ]
-        # Ív: (sw+R, bar_top) középpont, sugár R, 180°→270° (negyedkör)
         pts.extend(self._arc_points(sw + R, bar_top - R, R, 180, 270, 20))
-        # Sáv végéig jobbra
         pts.extend([w - 6, bar_top, w - 6, fh, 0, fh])
         canvas.create_polygon(pts, fill=self.LCARS_BLUE, outline="", smooth=False)
 
-        # Színes szegmensek a sávon (az ív utáni egyenes részen)
         seg_x = sw + R + 8
-        seg_w = (w - 6 - seg_x) // 3
+        seg_w = max(1, (w - 6 - seg_x) // 3)
         canvas.create_rectangle(
             seg_x + seg_w + 4, bar_top, seg_x + 2 * seg_w, fh,
             fill=self.LCARS_PURPLE, outline="",
@@ -3416,61 +3489,97 @@ class HUDWindow:
             fill=self.LCARS_TAN, outline="",
         )
 
-        # Cím a sáv felett (az ívtől jobbra lévő üres sötét területen)
+        footer_text_size = max(7, int(9 * s))
         canvas.create_text(
-            (sw + R + w - 6) // 2, bar_top // 2,
+            (sw + R + w - 6) // 2, max(6, bar_top // 2),
             text="STARFLEET CYCLING DIV",
-            fill=self.LCARS_CYAN_DIM, font=("Consolas", 8),
+            fill=self.LCARS_CYAN_DIM, font=(self._font_family, footer_text_size),
         )
 
     def _draw_sidebar(self, h: int) -> None:
         """LCARS bal oldalsáv rajzolása – színes szegmensek.
 
-        A szegmensek szélessége megegyezik az elbow-k sw értékével (0–16px).
+        A szegmensek szélessége a skálához igazodik,
+        és az utolsó szegmens mindig kitölti a maradék helyet.
         """
         self._sidebar.delete("all")
+        sw = max(10, int(16 * self._scale))
+        self._sidebar.config(width=sw)
+        if h < 10:
+            return
         colors = [self.LCARS_ORANGE, self.LCARS_GOLD, self.LCARS_BLUE,
                   self.LCARS_MAGENTA, self.LCARS_PURPLE, self.LCARS_TAN]
-        seg_h = max(10, h // len(colors))
+        n = len(colors)
+        seg_h = max(10, h // n)
+        gap = max(1, int(2 * self._scale))
         for i, c in enumerate(colors):
             y = i * seg_h
-            gap = 2
+            # Az utolsó szegmens mindig a sidebar aljáig ér
+            bottom = h if i == n - 1 else y + seg_h
             self._sidebar.create_rectangle(
-                0, y + gap, 16, y + seg_h - gap, fill=c, outline="",
+                0, y + gap, sw, bottom - gap, fill=c, outline="",
             )
 
     # ───────── UI SEGÉDEK ─────────
 
-    def _make_row(self, parent: tk.Frame, label: str, value: str, color: str) -> tk.Label:
+    # ── LCARS SZÍN HÁTTERES PANELES SOR ──────────────────────
+
+    _VAL_BG = "#001828"  # érték-mező sötét háttere
+
+    def _make_row(self, parent: tk.Frame, label: str, value: str,
+                  color: str, label_bg: str | None = None) -> tk.Label:
+        """Telemetria sor LCARS színes label háttérrel."""
+        if label_bg is None:
+            label_bg = self.LCARS_TAN
         row = tk.Frame(parent, bg=self.PANEL_BG)
-        row.pack(fill=tk.X, padx=8, pady=1)
-        tk.Label(
-            row, text=label, fg=self.LCARS_CYAN_DIM,
-            bg=self.PANEL_BG, font=("Consolas", 8), width=12, anchor="w"
-        ).pack(side=tk.LEFT)
+        row.pack(fill=tk.X, padx=6, pady=2)
+
+        key_lbl = tk.Label(
+            row, text=label, fg="#000a14",
+            bg=label_bg, font=(self._font_family, 9, "bold"),
+            width=12, anchor="w", padx=4, pady=3,
+        )
+        key_lbl.pack(side=tk.LEFT, fill=tk.Y)
+        self._row_key_labels.append(key_lbl)
+
         val_lbl = tk.Label(
             row, text=value, fg=color,
-            bg=self.PANEL_BG, font=("Consolas", 13, "bold"), anchor="e"
+            bg=self._VAL_BG, font=(self._font_family, 14, "bold"),
+            anchor="e", padx=6, pady=3,
         )
-        val_lbl.pack(side=tk.RIGHT, fill=tk.X, expand=True)
-        val_lbl.bind("<ButtonPress-1>", self._on_drag_start)
-        val_lbl.bind("<B1-Motion>", self._on_drag_move)
+        val_lbl.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(2, 0))
+
+        for w in (key_lbl, val_lbl, row):
+            w.bind("<ButtonPress-1>", self._on_drag_start)
+            w.bind("<B1-Motion>", self._on_drag_move)
         return val_lbl
 
-    def _make_status_row(self, parent: tk.Frame, label: str, value: str) -> tk.Label:
+    def _make_status_row(self, parent: tk.Frame, label: str, value: str,
+                         label_bg: str | None = None) -> tk.Label:
+        """Státusz sor LCARS színes label háttérrel."""
+        if label_bg is None:
+            label_bg = self.LCARS_BLUE
         row = tk.Frame(parent, bg=self.PANEL_BG)
-        row.pack(fill=tk.X, padx=8, pady=1)
-        tk.Label(
-            row, text=label, fg=self.TEXT_DIM,
-            bg=self.PANEL_BG, font=("Consolas", 8), width=12, anchor="w"
-        ).pack(side=tk.LEFT)
+        row.pack(fill=tk.X, padx=6, pady=2)
+
+        key_lbl = tk.Label(
+            row, text=label, fg="#000a14",
+            bg=label_bg, font=(self._font_family, 9, "bold"),
+            width=12, anchor="w", padx=4, pady=2,
+        )
+        key_lbl.pack(side=tk.LEFT, fill=tk.Y)
+        self._status_key_labels.append(key_lbl)
+
         val_lbl = tk.Label(
             row, text=value, fg=self.TEXT_DIM,
-            bg=self.PANEL_BG, font=("Consolas", 10), anchor="e"
+            bg=self._VAL_BG, font=(self._font_family, 11),
+            anchor="e", padx=6, pady=2,
         )
-        val_lbl.pack(side=tk.RIGHT, fill=tk.X, expand=True)
-        val_lbl.bind("<ButtonPress-1>", self._on_drag_start)
-        val_lbl.bind("<B1-Motion>", self._on_drag_move)
+        val_lbl.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(2, 0))
+
+        for w in (key_lbl, val_lbl, row):
+            w.bind("<ButtonPress-1>", self._on_drag_start)
+            w.bind("<B1-Motion>", self._on_drag_move)
         return val_lbl
 
     # ───────── SEGÉDFÜGGVÉNYEK ─────────
@@ -3484,14 +3593,15 @@ class HUDWindow:
     def _on_resize_drag(self, event: tk.Event) -> None:
         dx = event.x_root - self._resize_start_x
         dy = event.y_root - self._resize_start_y
-        new_w = max(260, self._resize_start_w + dx)
-        new_h = max(360, self._resize_start_h + dy)
+        new_w = max(220, self._resize_start_w + dx)
+        new_h = max(280, self._resize_start_h + dy)
         self._root.geometry(f"{new_w}x{new_h}")
         self._scale = new_w / self._base_width
         self._apply_scale()
         self._draw_header(self._header_canvas, new_w)
         self._draw_footer(self._footer_canvas, new_w)
-        self._draw_sidebar(new_h - 100)
+        sidebar_h = max(10, new_h - self._header_height - self._footer_height)
+        self._draw_sidebar(sidebar_h)
         self._resize_grip.place(relx=1.0, rely=1.0, anchor="se")
 
     def _set_alpha_from_menu(self, percent: int) -> None:
@@ -3674,27 +3784,52 @@ class HUDWindow:
 
     def _apply_scale(self) -> None:
         s = self._scale
-        self._lbl_zone.config(font=("Consolas", max(12, int(28 * s)), "bold"))
-        self._lbl_zone_label.config(font=("Consolas", max(7, int(8 * s))))
+        ff = self._font_family
 
-        val_size = max(9, int(13 * s))
+        # ── Zóna kijelző ──
+        self._lbl_zone.config(font=(ff, max(14, int(30 * s)), "bold"))
+        self._lbl_zone_label.config(font=(ff, max(7, int(9 * s))))
+
+        # ── Telemetria adat sorok (POWER, HR) – értékek ──
+        val_size = max(10, int(14 * s))
         for lbl in [self._lbl_power, self._lbl_hr]:
-            lbl.config(font=("Consolas", val_size, "bold"))
+            lbl.config(font=(ff, val_size, "bold"))
 
-        status_size = max(8, int(10 * s))
+        # ── Telemetria adat sorok – kulcs label-ek (színes hátteres, bold) ──
+        row_key_size = max(7, int(9 * s))
+        for lbl in self._row_key_labels:
+            lbl.config(font=(ff, row_key_size, "bold"))
+
+        # ── Státusz sorok – értékek ──
+        status_size = max(8, int(11 * s))
         for lbl in [
             self._lbl_ble, self._lbl_ble_sens, self._lbl_ant,
             self._lbl_zwift_udp, self._lbl_last_sent, self._lbl_cool,
         ]:
-            lbl.config(font=("Consolas", status_size))
+            lbl.config(font=(ff, status_size))
 
+        # ── Státusz sorok – kulcs label-ek (színes hátteres, bold) ──
+        status_key_size = max(7, int(9 * s))
+        for lbl in self._status_key_labels:
+            lbl.config(font=(ff, status_key_size, "bold"))
+
+        # ── Opacity slider + label ──
         self._alpha_slider.config(length=max(80, int(160 * s)), width=max(10, int(14 * s)))
-        self._alpha_value.config(font=("Consolas", max(8, int(10 * s)), "bold"))
+        self._alpha_value.config(font=(ff, max(8, int(11 * s)), "bold"))
+        self._opacity_label.config(font=(ff, max(7, int(9 * s)), "bold"))
+
+        # ── Header / Footer canvas magasság skálázása ──
+        new_header_h = max(30, int(50 * s))
+        new_footer_h = max(30, int(50 * s))
+        self._header_canvas.config(height=new_header_h)
+        self._footer_canvas.config(height=new_footer_h)
+        self._header_height = new_header_h
+        self._footer_height = new_footer_h
 
     # ───────── FUTTATÁS / BEZÁRÁS ─────────
 
     def run(self) -> None:
-        self._draw_sidebar(self._base_height - 100)
+        self._draw_sidebar(self._base_height - self._header_height - self._footer_height)
         self._root.mainloop()
 
     def close(self) -> None:
